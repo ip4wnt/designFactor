@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     VLM_BASE_URL: str = "http://localhost:11434/v1"
     VLM_MODEL_NAME: str = "gpt-4o-mini"
     VLM_API_KEY: str | None = None
+    # Выключатель VLM-аудита содержимого (Приложение 1, "Валидация контента").
+    # По умолчанию включён, но оркестратор всё равно деградирует мягко (см.
+    # orchestrator.py) — если эндпоинт недоступен, пайплайн не падает, просто
+    # в audit_issues[variant] попадает один issue с описанием сбоя, а не 11.
+    VLM_AUDIT_ENABLED: bool = True
 
     STORAGE_DIR: Path = Path("storage")
     SKILLS_DIR: Path = Path("skills")

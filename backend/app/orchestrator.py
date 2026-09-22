@@ -13,12 +13,13 @@ backend (app.api.routes создаёт её через asyncio.create_task) — 
 from __future__ import annotations
 
 import logging
+import uuid
 
 from app.config import get_settings
 from app.pipeline import assembly, audit, content_agent, parser
 from app.pipeline.assembly import VALID_VARIANTS
 from app.schemas.content_plan import ContentPlan
-from app.schemas.job import Job, JobStatus
+from app.schemas.job import AuditCategory, AuditIssue, Job, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ async def run_pipeline(job: Job, content_plan: ContentPlan | None = None) -> Non
             )
 
         job.status = JobStatus.ASSEMBLING
-        _assemble_and_audit_all_variants(job, settings)
+        await _assemble_and_audit_all_variants(job, settings)
 
         job.status = JobStatus.DONE
     except Exception as exc:  # noqa: BLE001 — любая ошибка стадии должна перевести job в failed
@@ -75,9 +76,9 @@ async def rerun_assembly_and_audit(job: Job, variant: str | None = None) -> None
     try:
         job.status = JobStatus.ASSEMBLING
         if variant is None:
-            _assemble_and_audit_all_variants(job, settings)
+            await _assemble_and_audit_all_variants(job, settings)
         else:
-            _assemble_and_audit_one_variant(job, settings, variant)
+            await _assemble_and_audit_one_variant(job, settings, variant)
 
         job.status = JobStatus.DONE
     except Exception as exc:  # noqa: BLE001
@@ -86,13 +87,13 @@ async def rerun_assembly_and_audit(job: Job, variant: str | None = None) -> None
         job.error = str(exc)
 
 
-def _assemble_and_audit_all_variants(job: Job, settings) -> None:
+async def _assemble_and_audit_all_variants(job: Job, settings) -> None:
     for variant in VALID_VARIANTS:
-        _assemble_and_audit_one_variant(job, settings, variant)
+        await _assemble_and_audit_one_variant(job, settings, variant)
     job.status = JobStatus.AUDITING
 
 
-def _assemble_and_audit_one_variant(job: Job, settings, variant: str) -> None:
+async def _assemble_and_audit_one_variant(job: Job, settings, variant: str) -> None:
     output_path = settings.outputs_dir / job.job_id / f"presentation_{variant}.pptx"
     assembly.assemble_presentation(
         template_path=job.template_path,
@@ -105,4 +106,28 @@ def _assemble_and_audit_one_variant(job: Job, settings, variant: str) -> None:
     job.export_paths["pptx"] = str(output_path)  # последний собранный вариант — путь для /export по умолчанию
 
     job.status = JobStatus.AUDITING
-    job.audit_issues[variant] = audit.audit_presentation(output_path)
+    issues = audit.audit_presentation(output_path, manifest=job.design_manifest)
+    issues.extend(await _run_vlm_audit_safely(output_path, settings))
+    job.audit_issues[variant] = issues
+
+
+async def _run_vlm_audit_safely(output_path, settings) -> list[AuditIssue]:
+    """VLM-аудит контента (Приложение 1, "Валидация контента") — недетерминированный,
+    требует живого VLM-эндпоинта. Деградируем мягко: если выключен в настройках
+    или эндпоинт недоступен/падает, пайплайн НЕ должен падать целиком —
+    остальные (детерминированные) проверки остаются полезны сами по себе."""
+    if not settings.VLM_AUDIT_ENABLED:
+        return []
+    try:
+        return await audit.audit_content_with_vlm(output_path)
+    except Exception as exc:  # noqa: BLE001 — сбой VLM не должен ронять сборку/детерминированный аудит
+        logger.warning("VLM-аудит контента недоступен для %s: %s", output_path, exc)
+        return [
+            AuditIssue(
+                issue_id=str(uuid.uuid4()),
+                slide_id="deck",
+                category=AuditCategory.CONTENT,
+                deterministic=False,
+                description=f"VLM-аудит контента пропущен (эндпоинт недоступен): {exc}",
+            )
+        ]
