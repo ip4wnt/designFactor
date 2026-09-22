@@ -216,6 +216,14 @@
     <input type="text" id="exportJobId" size="50">
   </p>
   <p>
+    Вариант вёрстки:
+    <select id="exportVariant">
+      <option value="variant_a">variant_a</option>
+      <option value="variant_b">variant_b</option>
+      <option value="variant_c">variant_c</option>
+    </select>
+  </p>
+  <p>
     Формат:
     <select id="exportFormat">
       <option value="pptx">pptx</option>
@@ -225,6 +233,7 @@
   </p>
   <p><button type="submit">Скачать</button></p>
 </form>
+<p><small>Job теперь всегда собирает три варианта вёрстки (variant_a/b/c) — статус job (раздел 3) вернёт все три пути в <code>variant_paths</code> и проблемы аудита по каждому в <code>audit_issues</code>.</small></p>
 
 <script>
 function apiBase() {
@@ -476,11 +485,12 @@ document.getElementById('exportForm').addEventListener('submit', function (e) {
   e.preventDefault();
   var jobId = document.getElementById('exportJobId').value.trim();
   var format = document.getElementById('exportFormat').value;
+  var variant = document.getElementById('exportVariant').value;
   if (!jobId) {
     alert('Укажите Job ID');
     return;
   }
-  window.open(apiBase() + '/jobs/' + jobId + '/export?format=' + format, '_blank');
+  window.open(apiBase() + '/jobs/' + jobId + '/export?format=' + format + '&variant=' + variant, '_blank');
 });
 </script>
 

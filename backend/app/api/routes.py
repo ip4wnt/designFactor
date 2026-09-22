@@ -95,7 +95,9 @@ async def fix_job(job_id: str, payload: FixRequest) -> dict[str, str]:
     if job.content_plan is None or job.design_manifest is None:
         raise HTTPException(status_code=409, detail="Job не дошёл до стадии сборки")
 
-    known_ids = {issue.issue_id for issue in job.audit_issues}
+    known_ids = {
+        issue.issue_id for issues in job.audit_issues.values() for issue in issues
+    }
     unknown = set(payload.issue_ids) - known_ids
     if unknown:
         raise HTTPException(status_code=400, detail=f"Неизвестные issue_id: {sorted(unknown)}")
@@ -195,26 +197,26 @@ async def preview_excel_sheets(file: UploadFile = File(...)) -> dict[str, list[s
 
 
 @router.get("/jobs/{job_id}/export")
-async def export_job(job_id: str, format: str = "pptx") -> FileResponse:
+async def export_job(job_id: str, format: str = "pptx", variant: str = "variant_a") -> FileResponse:
     job = get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job не найден")
     if job.status != JobStatus.DONE:
         raise HTTPException(status_code=409, detail="Job ещё не готов")
 
-    pptx_path = job.export_paths.get("pptx")
+    pptx_path = job.variant_paths.get(variant)
     if pptx_path is None:
-        raise HTTPException(status_code=500, detail="У job нет собранного .pptx")
+        raise HTTPException(status_code=404, detail=f"У job нет собранного варианта '{variant}'")
 
     settings = get_settings()
-    output_dir = settings.outputs_dir / job.job_id
+    output_dir = settings.outputs_dir / job.job_id / variant
     try:
         result_path = await export_presentation(pptx_path, output_dir, format)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ExportError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    job.export_paths[format] = str(result_path)
+    job.export_paths[f"{variant}_{format}"] = str(result_path)
 
     media_type = _EXPORT_MEDIA_TYPES.get(format, "application/octet-stream")
     return FileResponse(result_path, media_type=media_type, filename=result_path.name)

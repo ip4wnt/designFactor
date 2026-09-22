@@ -41,6 +41,35 @@ class Typography(BaseModel):
     body: TypographyStyle
 
 
+class TableStyleTokens(BaseModel):
+    """Стиль таблицы, извлечённый из реальной таблицы на слайде-образце
+    шаблона (если такая в шаблоне есть) — приоритетный источник стиля нативных
+    таблиц в генераторе (app/pipeline/styling.py) перед выводимым из палитры/
+    типографики. None в любом поле — в исходной таблице это не было однозначно
+    определимо (наследовано из темы, а не задано явно), тогда генератор берёт
+    значение из палитры для этого поля.
+    """
+
+    header_fill: str | None = None
+    header_text_color: str | None = None
+    header_bold: bool | None = None
+    row_odd_fill: str | None = None
+    row_even_fill: str | None = None
+    body_font: str | None = None
+    body_size: int | None = None
+
+
+class ChartStyleTokens(BaseModel):
+    """Стиль графика, извлечённый из реального графика на слайде-образце
+    шаблона, аналогично TableStyleTokens.
+    """
+
+    series_colors: list[str] = Field(default_factory=list)
+    font: str | None = None
+    font_size: int | None = None
+    has_legend: bool | None = None
+
+
 class DesignManifest(BaseModel):
     template_id: str
     palette: dict[str, str]  # роль темы (dk1/lt1/accent1..6/...) -> hex-цвет
@@ -48,3 +77,8 @@ class DesignManifest(BaseModel):
     layouts: list[Layout]
     slide_width_emu: int
     slide_height_emu: int
+    # None если в слайдах-образцах шаблона не нашлось ни одной реальной
+    # таблицы/графика — тогда styling.py использует только palette/typography,
+    # как и раньше.
+    table_style: TableStyleTokens | None = None
+    chart_style: ChartStyleTokens | None = None

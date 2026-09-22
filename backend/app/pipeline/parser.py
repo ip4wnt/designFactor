@@ -20,10 +20,12 @@ from pptx.oxml.ns import qn
 from pptx.util import Emu
 
 from app.schemas.design_manifest import (
+    ChartStyleTokens,
     DesignManifest,
     Layout,
     LayoutRole,
     LayoutRoleType,
+    TableStyleTokens,
     Typography,
     TypographyStyle,
 )
@@ -53,6 +55,12 @@ def parse_template(pptx_path: str | Path) -> DesignManifest:
     typography = _extract_typography(master)
     layouts = [_extract_layout(layout) for layout in master.slide_layouts]
 
+    # Слайды-образцы шаблона могут уже содержать готовые таблицы/графики —
+    # если так есть, это более точный источник фирменного стиля, чем вывод из
+    # palette/typography вслепую (автор шаблона мог сознательно выбрать другой accent
+    # для таблиц, отличный от accent1, или свой порядок цветов для серий графика).
+    table_style, chart_style = _extract_sample_styles(prs)
+
     return DesignManifest(
         template_id=str(uuid.uuid4()),
         palette=palette,
@@ -60,6 +68,126 @@ def parse_template(pptx_path: str | Path) -> DesignManifest:
         layouts=layouts,
         slide_width_emu=int(Emu(prs.slide_width)),
         slide_height_emu=int(Emu(prs.slide_height)),
+        table_style=table_style,
+        chart_style=chart_style,
+    )
+
+
+def _extract_sample_styles(prs: Presentation) -> tuple[TableStyleTokens | None, ChartStyleTokens | None]:
+    """Обходит все слайды-образцы шаблона в поисках первой реальной таблицы
+    и первого реального графика — вызывается до удаления этих слайдов в assembly.py,
+    так что видит точно то, что загрузил пользователь в шаблоне.
+    """
+    table_style: TableStyleTokens | None = None
+    chart_style: ChartStyleTokens | None = None
+
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if table_style is None and shape.has_table:
+                table_style = _extract_table_style(shape.table)
+            if chart_style is None and shape.has_chart:
+                chart_style = _extract_chart_style(shape.chart)
+        if table_style is not None and chart_style is not None:
+            break
+
+    return table_style, chart_style
+
+
+def _extract_table_style(table) -> TableStyleTokens | None:
+    if len(table.rows) < 1:
+        return None
+
+    header_cell = table.cell(0, 0)
+    header_fill = _cell_fill_hex(header_cell)
+    header_text_color, header_bold, body_font, body_size = _cell_text_style(header_cell)
+
+    row_odd_fill = None
+    row_even_fill = None
+    if len(table.rows) > 1:
+        row_odd_fill = _cell_fill_hex(table.cell(1, 0))
+    if len(table.rows) > 2:
+        row_even_fill = _cell_fill_hex(table.cell(2, 0))
+
+    return TableStyleTokens(
+        header_fill=header_fill,
+        header_text_color=header_text_color,
+        header_bold=header_bold,
+        row_odd_fill=row_odd_fill,
+        row_even_fill=row_even_fill,
+        body_font=body_font,
+        body_size=body_size,
+    )
+
+
+def _cell_fill_hex(cell) -> str | None:
+    try:
+        if cell.fill.type is None:
+            return None
+        return f"#{cell.fill.fore_color.rgb}"
+    except (AttributeError, TypeError, KeyError):
+        return None
+
+
+def _cell_text_style(cell) -> tuple[str | None, bool | None, str | None, int | None]:
+    """Читает цвет/жирность/шрифт/кегль первого run с текстом в ячейке."""
+    for paragraph in cell.text_frame.paragraphs:
+        for run in paragraph.runs:
+            color = None
+            try:
+                if run.font.color.type is not None:
+                    color = f"#{run.font.color.rgb}"
+            except (AttributeError, TypeError, KeyError):
+                pass
+            bold = run.font.bold
+            font_name = run.font.name
+            size = int(run.font.size.pt) if run.font.size is not None else None
+            return color, bold, font_name, size
+    return None, None, None, None
+
+
+def _extract_chart_style(chart) -> ChartStyleTokens | None:
+    series_colors: list[str] = []
+    try:
+        plot = chart.plots[0]
+        for series in plot.series:
+            hex_color = None
+            try:
+                if series.format.fill.type is not None:
+                    hex_color = f"#{series.format.fill.fore_color.rgb}"
+            except (AttributeError, TypeError, KeyError):
+                pass
+            if hex_color is None:
+                try:
+                    hex_color = f"#{series.format.line.color.rgb}"
+                except (AttributeError, TypeError, KeyError):
+                    pass
+            if hex_color is not None:
+                series_colors.append(hex_color)
+    except (AttributeError, IndexError):
+        pass
+
+    font = None
+    font_size = None
+    try:
+        font = chart.font.name
+        font_size = int(chart.font.size.pt) if chart.font.size is not None else None
+    except AttributeError:
+        pass
+
+    has_legend = None
+    try:
+        has_legend = bool(chart.has_legend)
+    except AttributeError:
+        pass
+
+    if not series_colors and font is None and has_legend is None:
+        return None
+
+    return ChartStyleTokens(
+        series_colors=series_colors,
+        font=font,
+        font_size=font_size,
+        has_legend=has_legend,
     )
 
 

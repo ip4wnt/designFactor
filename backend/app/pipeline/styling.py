@@ -1,11 +1,13 @@
 """Применение стиля темы шаблона к нативным таблицам и графикам.
 
-Источник стиля — только DesignManifest.palette/typography (уже извлечённые
-Парсером из a:clrScheme и p:txStyles темы), без анализа реальных
-таблиц/графиков на слайдах шаблона: в этом проекте образцы могут вообще не
-содержать готовых таблиц/графиков, а тема есть всегда.
+Главный источник — DesignManifest.table_style/chart_style, если парсер нашёл реальную
+таблицу/график на одном из слайдов-образцов шаблона (app/pipeline/parser.py,
+_extract_sample_styles) — это точный фирменный стиль, а не выведенный. Для любого
+поля, где такого токена нет (None — в образце его не было, или в шаблоне вовсе не
+нашлось таблиц/графика), фоллбек выводит значение из palette/typography, как
+раньше:
 
-Правила, которыми руководствуемся:
+Правила фоллбека:
 - Заголовок таблицы красится в accent1 (сплошная заливка), текст заголовка —
   в контрастный цвет (lt1 на тёмном accent, dk1 на светлом accent).
   Обычные строки чередуются: bg1 / лёгкий тон accent1 (полосатая заливка)
@@ -58,7 +60,12 @@ def _tint(rgb: RGBColor, amount: float) -> RGBColor:
 
 
 def accent_colors(manifest: DesignManifest) -> list[RGBColor]:
-    """Палитра accent1..accent6 из темы, в фиксированном порядке для серий графика."""
+    """Палитра для серий графика: цвета, реально используемые в шаблоне
+    (manifest.chart_style.series_colors), если такие были найдены парсером, иначе —
+    accent1..accent6 из темы в фиксированном порядке.
+    """
+    if manifest.chart_style is not None and manifest.chart_style.series_colors:
+        return [_hex_to_rgbcolor(c) for c in manifest.chart_style.series_colors]
     colors = [
         _hex_to_rgbcolor(manifest.palette.get(name), fallback)
         for name, fallback in zip(
@@ -70,12 +77,35 @@ def accent_colors(manifest: DesignManifest) -> list[RGBColor]:
 
 
 def style_table(table, manifest: DesignManifest) -> None:
-    """Красит нативную python-pptx таблицу в стиле темы: шапка + чередование строк."""
-    header_bg = _hex_to_rgbcolor(manifest.palette.get("accent1"), "4472C4")
-    header_text = _contrasting_text_color(header_bg, manifest)
+    """Красит нативную python-pptx таблицу в стиле темы: шапка + чередование строк.
+
+    Где есть manifest.table_style (токены, извлечённые из реальной таблицы в шаблоне),
+    они перебивают соответствующие значения, выведенные из palette/typography.
+    """
+    tokens = manifest.table_style
     body_font = manifest.typography.body
-    row_bg_even = _hex_to_rgbcolor(manifest.palette.get("lt1"), "FFFFFF")
-    row_bg_odd = _tint(header_bg, 0.85)
+
+    header_bg = _hex_to_rgbcolor(
+        tokens.header_fill if tokens else None,
+        (manifest.palette.get("accent1") or "4472C4").lstrip("#"),
+    )
+    header_text = (
+        _hex_to_rgbcolor(tokens.header_text_color)
+        if tokens and tokens.header_text_color
+        else _contrasting_text_color(header_bg, manifest)
+    )
+    header_bold = tokens.header_bold if tokens and tokens.header_bold is not None else True
+    row_bg_even = _hex_to_rgbcolor(
+        tokens.row_odd_fill if tokens else None,
+        (manifest.palette.get("lt1") or "FFFFFF").lstrip("#"),
+    )
+    row_bg_odd = (
+        _hex_to_rgbcolor(tokens.row_even_fill)
+        if tokens and tokens.row_even_fill
+        else _tint(header_bg, 0.85)
+    )
+    cell_font_name = (tokens.body_font if tokens and tokens.body_font else None) or body_font.font
+    cell_font_size = (tokens.body_size if tokens and tokens.body_size else None) or body_font.size
 
     # Отключаем встроенный стиль таблицы PowerPoint, чтобы наши явные заливки
     # не перебивались темой таблицы (banded rows/first row) из макета.
@@ -91,7 +121,7 @@ def style_table(table, manifest: DesignManifest) -> None:
     # тогда таблица визуально "выезжает" за исходный bbox. Задаём явную
     # минимальную высоту строки от кегля темы, чтобы её итоговый размер был
     # осознанным решением, а не слишком узкой полосой после деления поровну.
-    min_row_height = Emu(int(body_font.size * 1.6 * 12700))
+    min_row_height = Emu(int(cell_font_size * 1.6 * 12700))
     for row in table.rows:
         if row.height < min_row_height:
             row.height = min_row_height
@@ -100,7 +130,7 @@ def style_table(table, manifest: DesignManifest) -> None:
         header_cell = table.cell(0, col_idx)
         header_cell.fill.solid()
         header_cell.fill.fore_color.rgb = header_bg
-        _style_cell_text(header_cell, header_text, body_font, bold=True)
+        _style_cell_text_raw(header_cell, header_text, cell_font_name, cell_font_size, bold=header_bold)
 
     for row_idx in range(1, n_rows):
         row_color = row_bg_even if row_idx % 2 == 1 else row_bg_odd
@@ -109,23 +139,27 @@ def style_table(table, manifest: DesignManifest) -> None:
             cell = table.cell(row_idx, col_idx)
             cell.fill.solid()
             cell.fill.fore_color.rgb = row_color
-            _style_cell_text(cell, row_text_color, body_font, bold=False)
+            _style_cell_text_raw(cell, row_text_color, cell_font_name, cell_font_size, bold=False)
 
 
 def _style_cell_text(cell, color: RGBColor, font_style, bold: bool) -> None:
+    _style_cell_text_raw(cell, color, font_style.font, font_style.size, bold)
+
+
+def _style_cell_text_raw(cell, color: RGBColor, font_name: str, size_pt: int, bold: bool) -> None:
     for paragraph in cell.text_frame.paragraphs:
         if not paragraph.runs:
             # Пустая ячейка/заголовок без runs — python-pptx создаёт run лениво
             # только при первом обращении к paragraph.font, что достаточно
             # для окраски заголовка "по умолчанию" без текста.
-            paragraph.font.name = font_style.font
-            paragraph.font.size = Pt(font_style.size)
+            paragraph.font.name = font_name
+            paragraph.font.size = Pt(size_pt)
             paragraph.font.bold = bold
             paragraph.font.color.rgb = color
             continue
         for run in paragraph.runs:
-            run.font.name = font_style.font
-            run.font.size = Pt(font_style.size)
+            run.font.name = font_name
+            run.font.size = Pt(size_pt)
             run.font.bold = bold
             run.font.color.rgb = color
 
@@ -148,12 +182,48 @@ def style_chart(chart, manifest: DesignManifest) -> None:
             except (AttributeError, TypeError):
                 pass
 
+    chart_font_name = (
+        (manifest.chart_style.font if manifest.chart_style else None) or manifest.typography.body.font
+    )
+    chart_font_size = (
+        (manifest.chart_style.font_size if manifest.chart_style else None) or manifest.typography.body.size
+    )
     try:
-        chart.font.name = manifest.typography.body.font
-        chart.font.size = Pt(max(manifest.typography.body.size - 2, 8))
+        chart.font.name = chart_font_name
+        chart.font.size = Pt(max(chart_font_size - 2, 8))
     except AttributeError:
         pass
 
     if chart.has_legend:
-        chart.legend.font.name = manifest.typography.body.font
-        chart.legend.font.size = Pt(max(manifest.typography.body.size - 2, 8))
+        chart.legend.font.name = chart_font_name
+        chart.legend.font.size = Pt(max(chart_font_size - 2, 8))
+
+
+def style_title_textbox(text_frame, manifest: DesignManifest) -> None:
+    """Красит текстовый фрейм заголовка в стиль темы (typography.title)."""
+    style = manifest.typography.title
+    color = _hex_to_rgbcolor(manifest.palette.get("dk1"), "000000")
+    for paragraph in text_frame.paragraphs:
+        _apply_run_style(paragraph, style.font, style.size, style.bold, color)
+
+
+def style_body_textbox(text_frame, manifest: DesignManifest, bold: bool | None = None) -> None:
+    """Красит текстовый фрейм тела (буллеты/текст) в стиль темы (typography.body)."""
+    style = manifest.typography.body
+    color = _hex_to_rgbcolor(manifest.palette.get("dk1"), "000000")
+    for paragraph in text_frame.paragraphs:
+        _apply_run_style(paragraph, style.font, style.size, bold if bold is not None else style.bold, color)
+
+
+def _apply_run_style(paragraph, font_name: str, size_pt: int, bold: bool, color: RGBColor) -> None:
+    if not paragraph.runs:
+        paragraph.font.name = font_name
+        paragraph.font.size = Pt(size_pt)
+        paragraph.font.bold = bold
+        paragraph.font.color.rgb = color
+        return
+    for run in paragraph.runs:
+        run.font.name = font_name
+        run.font.size = Pt(size_pt)
+        run.font.bold = bold
+        run.font.color.rgb = color

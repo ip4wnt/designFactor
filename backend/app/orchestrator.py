@@ -4,6 +4,11 @@
 backend (app.api.routes создаёт её через asyncio.create_task) — без очередей,
 воркеров и Celery/Redis: это осознанное упрощение MVP-монолита (см. README).
 Ошибка на любой стадии останавливает пайплайн и переводит job в failed.
+
+Стадия ASSEMBLING+AUDITING прогоняется по ТРЁМ вариантам вёрстки
+(variant_a/b/c, см. app/pipeline/layout_engine.py) — на выходе три .pptx-файла
+и три независимых набора проблем аудита, а не один: ТЗ прямо требует "три
+файла презентации" на выходе одного job.
 """
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ import logging
 
 from app.config import get_settings
 from app.pipeline import assembly, audit, content_agent, parser
+from app.pipeline.assembly import VALID_VARIANTS
 from app.schemas.content_plan import ContentPlan
 from app.schemas.job import Job, JobStatus
 
@@ -42,18 +48,7 @@ async def run_pipeline(job: Job, content_plan: ContentPlan | None = None) -> Non
             )
 
         job.status = JobStatus.ASSEMBLING
-        output_path = settings.outputs_dir / job.job_id / "presentation.pptx"
-        assembly.assemble_presentation(
-            template_path=job.template_path,
-            manifest=job.design_manifest,
-            content_plan=job.content_plan,
-            output_path=output_path,
-        )
-        job.variant_paths["variant_a"] = str(output_path)
-        job.export_paths["pptx"] = str(output_path)
-
-        job.status = JobStatus.AUDITING
-        job.audit_issues = audit.audit_presentation(output_path)
+        _assemble_and_audit_all_variants(job, settings)
 
         job.status = JobStatus.DONE
     except Exception as exc:  # noqa: BLE001 — любая ошибка стадии должна перевести job в failed
@@ -62,33 +57,52 @@ async def run_pipeline(job: Job, content_plan: ContentPlan | None = None) -> Non
         job.error = str(exc)
 
 
-async def rerun_assembly_and_audit(job: Job, variant: str = "variant_a") -> None:
+async def rerun_assembly_and_audit(job: Job, variant: str | None = None) -> None:
     """Перезапуск Компоновщика+Аудита для POST /jobs/{id}/fix.
+
+    `variant=None` (по умолчанию) пересобирает ВСЕ три варианта — это путь
+    для правок ContentPlan (импорт Excel, добавление блока), которые должны
+    попасть во все варианты одинаково. `variant="variant_b"` и т.п. пересобирает
+    только один — для точечной пересборки после локальной правки конкретного
+    варианта (зарезервировано на будущее, сейчас UI всегда правит план целиком).
 
     Ограничение текущей версии: список issue_id из запроса пока не
     применяется точечно (нет привязки AuditIssue к конкретному
-    content-блоку) — просто пересобирает колоду и гоняет аудит заново.
+    content-блоку) — просто пересобирает колоду(и) и гоняет аудит заново.
     Честно описано в README/docs/AUDIT.md как TODO.
     """
     settings = get_settings()
     try:
         job.status = JobStatus.ASSEMBLING
-        output_path = settings.outputs_dir / job.job_id / "presentation.pptx"
-        assembly.assemble_presentation(
-            template_path=job.template_path,
-            manifest=job.design_manifest,
-            content_plan=job.content_plan,
-            output_path=output_path,
-            variant=variant,
-        )
-        job.variant_paths[variant] = str(output_path)
-        job.export_paths["pptx"] = str(output_path)
-
-        job.status = JobStatus.AUDITING
-        job.audit_issues = audit.audit_presentation(output_path)
+        if variant is None:
+            _assemble_and_audit_all_variants(job, settings)
+        else:
+            _assemble_and_audit_one_variant(job, settings, variant)
 
         job.status = JobStatus.DONE
     except Exception as exc:  # noqa: BLE001
         logger.exception("Пере-сборка упала для job %s", job.job_id)
         job.status = JobStatus.FAILED
         job.error = str(exc)
+
+
+def _assemble_and_audit_all_variants(job: Job, settings) -> None:
+    for variant in VALID_VARIANTS:
+        _assemble_and_audit_one_variant(job, settings, variant)
+    job.status = JobStatus.AUDITING
+
+
+def _assemble_and_audit_one_variant(job: Job, settings, variant: str) -> None:
+    output_path = settings.outputs_dir / job.job_id / f"presentation_{variant}.pptx"
+    assembly.assemble_presentation(
+        template_path=job.template_path,
+        manifest=job.design_manifest,
+        content_plan=job.content_plan,
+        output_path=output_path,
+        variant=variant,
+    )
+    job.variant_paths[variant] = str(output_path)
+    job.export_paths["pptx"] = str(output_path)  # последний собранный вариант — путь для /export по умолчанию
+
+    job.status = JobStatus.AUDITING
+    job.audit_issues[variant] = audit.audit_presentation(output_path)

@@ -1,0 +1,195 @@
+# Библиотека паттернов вёрстки слайдов — DesignFactor.
+#
+# Паттерн описывает ТОЛЬКО геометрию слайда: набор именованных зон в долях
+# ширины/высоты (0..1 от размера слайда), допустимые типы контента для
+# каждой зоны и её роль. Паттерны НЕ знают о конкретном шаблоне — их можно
+# применить к любому DesignManifest, т.к. цвет/шрифт/декор приходят из
+# токенов темы отдельно (см. app/pipeline/styling.py и
+# app/pipeline/layout_engine.py).
+#
+# Формат зоны:
+#   name       — идентификатор зоны (title/subtitle/content_1/content_2/...)
+#   role       — title | body | chart | table | image | any
+#                (any — зона принимает первый неразмещённый контент-блок
+#                любого типа; используется в тексто-ориентированных паттернах)
+#   x, y, w, h — прямоугольник в долях слайда (0..1), считается от margin,
+#                а не от абсолютного края — движок вычитает поля сам.
+#   max_items / max_words_per_item — опциональные ограничения плотности
+#                (используются аудитом и укладчиком буллетов).
+#
+# Поле `tags` группирует паттерны по названначению для селектора вариантов
+# (см. app/pipeline/layout_engine.py: VARIANT_STRATEGIES) — не участвует в
+# геометрии.
+#
+# slot_count — количество независимых контент-зон (без title/subtitle),
+# density — приблизительная "насыщенность" паттерна (compact/balanced/airy),
+# используется стратегиями variant_b (плотный) и variant_c (просторный)
+# для приоритизации при равном соответствии типов контента.
+
+version: 1
+
+patterns:
+  - id: title_full_body
+    description: "Заголовок сверху, одна широкая зона контента на всю ширину"
+    tags: [single_block, universal]
+    slot_count: 1
+    density: balanced
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.16}
+      - {name: content_1, role: any, x: 0.0, y: 0.20, w: 1.0, h: 0.80}
+
+  - id: title_full_body_airy
+    description: "Заголовок сверху с большим отступом, контент занимает меньше высоты — просторный вид"
+    tags: [single_block, airy]
+    slot_count: 1
+    density: airy
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.20}
+      - {name: content_1, role: any, x: 0.08, y: 0.30, w: 0.84, h: 0.62}
+
+  - id: title_left_narrow_content_right
+    description: "Заголовок узкой колонкой слева (вертикальный акцент), контент справа"
+    tags: [asymmetric, single_block]
+    slot_count: 1
+    density: balanced
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 0.32, h: 1.0}
+      - {name: content_1, role: any, x: 0.36, y: 0.08, w: 0.64, h: 0.84}
+
+  - id: title_top_two_columns_equal
+    description: "Заголовок сверху, два равных блока контента бок о бок"
+    tags: [two_block, balanced]
+    slot_count: 2
+    density: balanced
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.16}
+      - {name: content_1, role: any, x: 0.0, y: 0.20, w: 0.48, h: 0.80}
+      - {name: content_2, role: any, x: 0.52, y: 0.20, w: 0.48, h: 0.80}
+
+  - id: title_top_two_columns_60_40
+    description: "Заголовок сверху, левая зона шире (60%) для таблицы/графика, правая уже (40%) для буллетов"
+    tags: [two_block, asymmetric]
+    slot_count: 2
+    density: balanced
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.16}
+      - {name: content_1, role: any, x: 0.0, y: 0.20, w: 0.58, h: 0.80}
+      - {name: content_2, role: any, x: 0.62, y: 0.20, w: 0.38, h: 0.80}
+
+  - id: title_top_two_columns_40_60
+    description: "Заголовок сверху, левая зона уже (40%) для буллетов, правая шире (60%) для таблицы/графика"
+    tags: [two_block, asymmetric]
+    slot_count: 2
+    density: balanced
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.16}
+      - {name: content_1, role: any, x: 0.0, y: 0.20, w: 0.38, h: 0.80}
+      - {name: content_2, role: any, x: 0.42, y: 0.20, w: 0.58, h: 0.80}
+
+  - id: title_stacked_two_rows
+    description: "Заголовок сверху, два блока контента друг под другом (для двух таблиц/текстовых блоков подряд)"
+    tags: [two_block, compact]
+    slot_count: 2
+    density: compact
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.14}
+      - {name: content_1, role: any, x: 0.0, y: 0.18, w: 1.0, h: 0.39}
+      - {name: content_2, role: any, x: 0.0, y: 0.59, w: 1.0, h: 0.39}
+
+  - id: title_top_three_columns
+    description: "Заголовок сверху, три равные колонки — для сравнения трёх пунктов/картинок"
+    tags: [three_block, compact]
+    slot_count: 3
+    density: compact
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.16}
+      - {name: content_1, role: any, x: 0.0, y: 0.22, w: 0.31, h: 0.72}
+      - {name: content_2, role: any, x: 0.345, y: 0.22, w: 0.31, h: 0.72}
+      - {name: content_3, role: any, x: 0.69, y: 0.22, w: 0.31, h: 0.72}
+
+  - id: title_top_chart_plus_bullets_wide
+    description: "Заголовок сверху, крупный график слева (65%), краткие выводы-буллеты справа (35%)"
+    tags: [two_block, chart_focus]
+    slot_count: 2
+    density: balanced
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.16}
+      - {name: content_1, role: chart, x: 0.0, y: 0.20, w: 0.62, h: 0.80}
+      - {name: content_2, role: any, x: 0.66, y: 0.20, w: 0.34, h: 0.80}
+
+  - id: title_top_table_full_width
+    description: "Заголовок сверху, таблица на всю ширину — для таблиц с большим числом столбцов"
+    tags: [single_block, table_focus]
+    slot_count: 1
+    density: balanced
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.14}
+      - {name: content_1, role: table, x: 0.0, y: 0.18, w: 1.0, h: 0.80}
+
+  - id: title_center_big_number
+    description: "Крупный акцентный слайд: заголовок сверху малым кеглем, один яркий блок по центру (для ключевой метрики/цитаты)"
+    tags: [single_block, airy, accent]
+    slot_count: 1
+    density: airy
+    zones:
+      - {name: title, role: title, x: 0.12, y: 0.06, w: 0.76, h: 0.14}
+      - {name: content_1, role: any, x: 0.14, y: 0.30, w: 0.72, h: 0.55}
+
+  - id: title_bottom_content_top
+    description: "Контент сверху, заголовок снизу узкой полосой (инверсия для акцентных/обложечных слайдов)"
+    tags: [single_block, asymmetric]
+    slot_count: 1
+    density: balanced
+    zones:
+      - {name: content_1, role: any, x: 0.0, y: 0.0, w: 1.0, h: 0.78}
+      - {name: title, role: title, x: 0.0, y: 0.82, w: 1.0, h: 0.16}
+
+  - id: title_top_four_grid
+    description: "Заголовок сверху, сетка 2x2 из четырёх равных блоков — для набора коротких фактов/иконок"
+    tags: [four_block, compact]
+    slot_count: 4
+    density: compact
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.14}
+      - {name: content_1, role: any, x: 0.0, y: 0.18, w: 0.48, h: 0.39}
+      - {name: content_2, role: any, x: 0.52, y: 0.18, w: 0.48, h: 0.39}
+      - {name: content_3, role: any, x: 0.0, y: 0.59, w: 0.48, h: 0.39}
+      - {name: content_4, role: any, x: 0.52, y: 0.59, w: 0.48, h: 0.39}
+
+  - id: title_only_cover
+    description: "Только заголовок по центру — для титульного/разделительного слайда без контент-блоков"
+    tags: [cover, no_content]
+    slot_count: 0
+    density: airy
+    zones:
+      - {name: title, role: title, x: 0.10, y: 0.38, w: 0.80, h: 0.24}
+
+  - id: title_top_subtitle_body
+    description: "Заголовок сверху, подзаголовок под ним, один блок контента ниже — для слайдов с пояснением к теме"
+    tags: [single_block, balanced]
+    slot_count: 1
+    density: balanced
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.14}
+      - {name: subtitle, role: any, x: 0.0, y: 0.16, w: 1.0, h: 0.10}
+      - {name: content_1, role: any, x: 0.0, y: 0.30, w: 1.0, h: 0.70}
+
+  - id: title_top_table_and_chart_stacked
+    description: "Заголовок сверху, таблица и график друг под другом — для слайдов, где нужно и то и другое"
+    tags: [two_block, data_heavy]
+    slot_count: 2
+    density: compact
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.0, w: 1.0, h: 0.13}
+      - {name: content_1, role: table, x: 0.0, y: 0.17, w: 1.0, h: 0.40}
+      - {name: content_2, role: chart, x: 0.0, y: 0.60, w: 1.0, h: 0.38}
+
+  - id: title_left_image_right_content
+    description: "Заголовок и подпись слева узкой колонкой, изображение или график справа — акцент на визуал"
+    tags: [asymmetric, image_focus]
+    slot_count: 1
+    density: balanced
+    zones:
+      - {name: title, role: title, x: 0.0, y: 0.06, w: 0.36, h: 0.20}
+      - {name: content_1, role: any, x: 0.0, y: 0.30, w: 0.36, h: 0.62}
+      - {name: content_2, role: image, x: 0.40, y: 0.0, w: 0.60, h: 1.0}

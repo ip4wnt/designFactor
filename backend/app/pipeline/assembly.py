@@ -1,27 +1,49 @@
 """Компоновщик слайдов: DesignManifest + ContentPlan -> .pptx.
 
-Мэтчинг макета — детерминированный rule-based скоринг ролей макета против
-типов контент-блоков слайда, а НЕ вызов LLM на каждый слайд: при бюджете
-5 минут на колоду LLM-вызов на каждый из ~10 слайдов слишком дорог и
-недетерминирован по времени ответа.
+Вёрстка — синтетическая, через библиотеку геометрических паттернов
+(app/pipeline/layout_engine.py + app/config/layout_patterns.yaml), а НЕ через
+заполнение plaeholder-ов исходных slide_layouts шаблона. Так решается
+фундаментальное ограничение первой версии: шаблон может не иметь ни одного
+макета с ролью BODY/CHART/TABLE (только "Обложка"/TITLE-only макеты — типичный
+случай для реальных корпоративных шаблонов), и тогда placeholder-матчинг
+не может предложить вариативность вообще.
+
+Фирменный стиль результата обеспечивают дизайн-токены DesignManifest
+(палитра/типографика темы, см. styling.py), а не переиспользование самих
+plaeholder-ов — они читаются один раз из XML темы Парсером и применяются к
+любой геометрии.
+
+Три варианта вёрстки (variant_a/b/c) — три разные стратегии ВЫБОРА паттерна
+для одного и того же content_plan (см. layout_engine.select_pattern), не три
+разных рендерера: рендерер один, разница только в том, какой паттерн он
+получает для каждого слайда.
 
 Диаграммы и таблицы — нативные объекты python-pptx (add_chart/add_table),
 растровые изображения слайдов результатом не считаются.
 """
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 
 from pptx import Presentation
 from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE
-from pptx.util import Emu
+from pptx.enum.text import PP_ALIGN
+from pptx.util import Pt
 
 from app.pipeline.capacity import fit_chart_data, fit_table_data
-from app.pipeline.styling import style_chart, style_table
+from app.pipeline.layout_engine import (
+    Pattern,
+    Zone,
+    ZoneAssignment,
+    assign_zones,
+    select_pattern,
+    title_zone,
+    zone_bbox_emu,
+)
+from app.pipeline.styling import style_body_textbox, style_chart, style_table, style_title_textbox
 from app.schemas.content_plan import ContentBlock, ContentBlockType, ContentPlan, SlideSpec
-from app.schemas.design_manifest import DesignManifest, Layout, LayoutRoleType
+from app.schemas.design_manifest import DesignManifest
 
 _CHART_TYPE_MAP = {
     "bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
@@ -29,23 +51,7 @@ _CHART_TYPE_MAP = {
     "pie": XL_CHART_TYPE.PIE,
 }
 
-# Отступы от краёв слайда и между блоками для синтетического fallback-макета
-# (см. _safe_content_bbox) — когда в шаблоне нет готового плейсхолдера под тип
-# контент-блока — чтобы не класть данные поверх заголовка по абсолютным координатам.
-_SLIDE_MARGIN = Emu(457200)  # 0.5"
-_TITLE_GAP = Emu(228600)  # 0.25" между заголовком и контентом ниже
-
-# Страховка на случай, если на слайде вообще нет ни одного placeholder
-# (теоретически возможно для макета без титула) — размер слайда 4:3 по умолчанию.
-_FALLBACK_BBOX = (Emu(838200), Emu(1600200), Emu(7620000), Emu(4525963))
-
-# Конфиги скоринга под разные варианты вёрстки. ТЗ требует заложить
-# расширение под variant_a/b/c — реализован сейчас только variant_a,
-# остальные объявлены как явный TODO, чтобы не притворяться, что готовы.
-SCORING_CONFIGS: dict[str, dict[str, float]] = {
-    "variant_a": {"role_match": 2.0, "missing_role_penalty": -3.0, "unused_role_penalty": -0.5},
-}
-_NOT_IMPLEMENTED_VARIANTS = {"variant_b", "variant_c"}
+VALID_VARIANTS = ("variant_a", "variant_b", "variant_c")
 
 
 def assemble_presentation(
@@ -55,33 +61,28 @@ def assemble_presentation(
     output_path: str | Path,
     variant: str = "variant_a",
 ) -> Path:
-    if variant in _NOT_IMPLEMENTED_VARIANTS:
-        raise NotImplementedError(f"Вариант вёрстки '{variant}' пока не реализован")
-    if variant not in SCORING_CONFIGS:
+    if variant not in VALID_VARIANTS:
         raise ValueError(f"Неизвестный вариант вёрстки: {variant}")
 
-    config = SCORING_CONFIGS[variant]
     prs = Presentation(str(template_path))
-    pptx_layouts = list(prs.slide_masters[0].slide_layouts)
-
-    # manifest.layouts построен Парсером обходом того же master.slide_layouts
-    # в том же порядке -> индексы совпадают 1-в-1. Это единственная связь
-    # между "нашей" моделью Layout и реальным объектом python-pptx.
-    if len(manifest.layouts) != len(pptx_layouts):
-        raise ValueError("DesignManifest не соответствует шаблону: число макетов расходится")
-    layout_pairs = list(zip(manifest.layouts, pptx_layouts))
 
     # Presentation(template_path) открывает ИСХОДНЫЙ файл целиком, вместе со
     # всеми слайдами-образцами, которые в нём уже есть (это те самые слайды,
     # которые Парсер разбирал, чтобы понять дизайн-систему). Нам нужны только
-    # master/theme/layouts из этого файла — сами слайды-образцы в выходную
-    # колоду попадать не должны, иначе результат = шаблон + новые слайды.
+    # master/theme из этого файла — сами слайды-образцы в выходную колоду
+    # попадать не должны, иначе результат = шаблон + новые слайды.
     _strip_existing_slides(prs)
 
+    # Пустой (blank) макет темы — на нём нет никаких plaeholder-ов, поэтому
+    # синтетические зоны паттерна не конфликтуют с чужой геометрией. Тема
+    # (цвета/шрифты по умолчанию) всё равно наследуется на уровне presentation,
+    # так что новые textbox/chart/table получают её через явные токены стиля.
+    blank_layout = _find_blank_layout(prs)
+
     for slide_spec in content_plan.slides:
-        layout, pptx_layout = _select_layout(layout_pairs, slide_spec, config)
-        slide = prs.slides.add_slide(pptx_layout)
-        _fill_slide(slide, layout, slide_spec, manifest)
+        pattern = select_pattern(slide_spec, variant)
+        slide = prs.slides.add_slide(blank_layout)
+        _render_slide(slide, pattern, slide_spec, manifest)
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,119 +90,17 @@ def assemble_presentation(
     return output_path
 
 
-def _select_layout(
-    layout_pairs: list[tuple[Layout, object]],
-    slide_spec: SlideSpec,
-    config: dict[str, float],
-) -> tuple[Layout, object]:
-    best_score = None
-    best_pair = None
-    for layout, pptx_layout in layout_pairs:
-        score = _score_layout(layout, slide_spec, config)
-        if best_score is None or score > best_score:
-            best_score = score
-            best_pair = (layout, pptx_layout)
-    return best_pair
-
-
-def _score_layout(layout: Layout, slide_spec: SlideSpec, config: dict[str, float]) -> float:
-    role_counts = Counter(role.role for role in layout.roles)
-    match = config["role_match"]
-    missing = config["missing_role_penalty"]
-    unused = config["unused_role_penalty"]
-
-    score = match if role_counts.get(LayoutRoleType.TITLE, 0) > 0 else missing
-
-    body_needed = sum(
-        1 for b in slide_spec.content_blocks if b.type in (ContentBlockType.BULLETS, ContentBlockType.TEXT)
-    )
-    body_available = role_counts.get(LayoutRoleType.BODY, 0)
-    score += match * min(body_needed, body_available)
-    if body_needed > body_available:
-        score += missing * (body_needed - body_available)
-
-    chart_needed = sum(1 for b in slide_spec.content_blocks if b.type == ContentBlockType.CHART)
-    if chart_needed > 0:
-        score += match if layout.supports_chart else missing
-
-    table_needed = sum(1 for b in slide_spec.content_blocks if b.type == ContentBlockType.TABLE)
-    if table_needed > 0:
-        score += match if layout.supports_table else missing
-
-    used_roles = 1 + min(body_needed, body_available) + (1 if chart_needed else 0) + (1 if table_needed else 0)
-    total_roles = len(layout.roles)
-    score += unused * max(0, total_roles - used_roles)
-
-    return score
-
-
-def _fill_slide(slide, layout: Layout, slide_spec: SlideSpec, manifest: DesignManifest) -> None:
-    title_idx = next((r.placeholder_idx for r in layout.roles if r.role == LayoutRoleType.TITLE), None)
-    if title_idx is not None:
-        _set_placeholder_text(slide, title_idx, [slide_spec.title])
-
-    body_idxs = [r.placeholder_idx for r in layout.roles if r.role == LayoutRoleType.BODY]
-    chart_idxs = [r.placeholder_idx for r in layout.roles if r.role == LayoutRoleType.CHART]
-    table_idxs = [r.placeholder_idx for r in layout.roles if r.role == LayoutRoleType.TABLE]
-
-    # Блоки, для которых в макете НЕТ подходящего placeholder (ни своей роли,
-    # ни свободного BODY) — им нужна синтетическая безопасная зона вместо
-    # захвата чужого/несуществующего плейсхолдера. Считаем один раз на слайд,
-    # т.к. каждый такой блок отодвигает title и получает следующую полосу вниз.
-    slide_width = manifest.slide_width_emu
-    slide_height = manifest.slide_height_emu
-
-    # Сколько блоков всего попадёт в синтетическую зону — нужно знать заранее,
-    # чтобы разделить доступную высоту поровну между ними, а не отдавать всё
-    # оставшееся место первому блоку и уронить второй за нижний край слайда.
-    fallback_slots_needed = 0
-    for block in slide_spec.content_blocks:
-        if block.type == ContentBlockType.CHART and not chart_idxs and not body_idxs:
-            fallback_slots_needed += 1
-        elif block.type == ContentBlockType.TABLE and not table_idxs and not body_idxs:
-            fallback_slots_needed += 1
-    fallback_cursor_top = None
-    fallback_slots_remaining = fallback_slots_needed
-    if fallback_slots_needed:
-        fallback_cursor_top = _make_room_below_title(slide, title_idx, slide_width, slide_height)
-
-    for block in slide_spec.content_blocks:
-        if block.type in (ContentBlockType.BULLETS, ContentBlockType.TEXT):
-            if not body_idxs:
-                continue
-            idx = body_idxs.pop(0)
-            texts = block.bullets if block.type == ContentBlockType.BULLETS else [block.text or ""]
-            _set_placeholder_text(slide, idx, texts or [""])
-        elif block.type == ContentBlockType.CHART:
-            idx = chart_idxs.pop(0) if chart_idxs else (body_idxs.pop(0) if body_idxs else None)
-            if idx is None:
-                bbox, fallback_cursor_top = _next_fallback_bbox(
-                    fallback_cursor_top, slide_width, slide_height, fallback_slots_remaining
-                )
-                fallback_slots_remaining -= 1
-                _add_native_chart(slide, None, block, manifest, bbox=bbox)
-            else:
-                _add_native_chart(slide, idx, block, manifest)
-        elif block.type == ContentBlockType.TABLE:
-            idx = table_idxs.pop(0) if table_idxs else (body_idxs.pop(0) if body_idxs else None)
-            if idx is None:
-                bbox, fallback_cursor_top = _next_fallback_bbox(
-                    fallback_cursor_top, slide_width, slide_height, fallback_slots_remaining
-                )
-                fallback_slots_remaining -= 1
-                _add_native_table(slide, None, block, manifest, bbox=bbox)
-            else:
-                _add_native_table(slide, idx, block, manifest)
-
-
-def _set_placeholder_text(slide, idx: int, paragraphs: list[str]) -> None:
-    placeholder = slide.placeholders[idx]
-    text_frame = placeholder.text_frame
-    text_frame.clear()
-    text_frame.paragraphs[0].text = paragraphs[0]
-    for extra in paragraphs[1:]:
-        p = text_frame.add_paragraph()
-        p.text = extra
+def _find_blank_layout(prs: Presentation):
+    """Ищет макет без plaeholder-ов вообще (обычно называется "Пустой слайд"/
+    "Blank"). Если такого нет — берёт макет с наименьшим числом plaeholder-ов
+    и просто удаляет их со слайда после add_slide (см. _render_slide), т.к.
+    вёрстка полностью синтетическая и старые plaeholder-ы никогда не используются.
+    """
+    layouts = list(prs.slide_masters[0].slide_layouts)
+    no_placeholder = [layout for layout in layouts if len(list(layout.placeholders)) == 0]
+    if no_placeholder:
+        return no_placeholder[0]
+    return min(layouts, key=lambda layout: len(list(layout.placeholders)))
 
 
 def _strip_existing_slides(prs: Presentation) -> None:
@@ -218,86 +117,99 @@ def _strip_existing_slides(prs: Presentation) -> None:
         sldIdLst.remove(sldId)
 
 
-def _make_room_below_title(slide, title_idx: int | None, slide_width: int, slide_height: int) -> int:
-    """Сжимает title-placeholder в верхнюю полосу слайда, чтобы освободить
-    место для таблицы/графика ниже — вместо того чтобы класть данные поверх
-    него по абсолютным координатам (что и давало наложение в title-only макетах типа
-    "Обложка"). Возвращает top-координату, с которой можно начинать раскладку
-    контента ниже заголовка.
+def _strip_all_placeholders(slide) -> None:
+    """Удаляет унаследованные от макета plaeholder-ы со слайда — вёрстка
+    целиком синтетическая (см. модульный docstring), унаследованные
+    plaeholder-ы дают пустые декоративные рамки в аудите, если их не убрать.
     """
-    header_band_height = Emu(int(slide_height * 0.22))
-
-    if title_idx is not None:
-        try:
-            placeholder = slide.placeholders[title_idx]
-        except KeyError:
-            placeholder = None
-        if placeholder is not None:
-            placeholder.left = _SLIDE_MARGIN
-            placeholder.top = _SLIDE_MARGIN
-            placeholder.width = slide_width - 2 * _SLIDE_MARGIN
-            placeholder.height = header_band_height - _SLIDE_MARGIN
-            # Сжатый заголовок выглядит аккуратнее, если он прижат к верхнему краю
-            # и текст не пытается автомасштабироваться под исходный большой блок.
-            try:
-                placeholder.text_frame.word_wrap = True
-            except AttributeError:
-                pass
-        return int(header_band_height)
-
-    return int(_SLIDE_MARGIN)
+    for shape in list(slide.shapes):
+        if shape.is_placeholder:
+            shape._element.getparent().remove(shape._element)
 
 
-def _next_fallback_bbox(
-    cursor_top: int, slide_width: int, slide_height: int, slots_remaining: int
-) -> tuple[tuple[int, int, int, int], int]:
-    """Выдаёт следующую свободную полосу под фоллбэк-контент, идя вниз от
-    `cursor_top`. `slots_remaining` — сколько таких блоков ещё осталось выдать на этом
-    слайде, включая текущий — делит оставшуюся высоту поровну между ними,
-    а не отдаёт всё место первому и роняет второй за нижний край. Возвращает
-    (bbox, новый cursor_top).
-    """
-    left = _SLIDE_MARGIN
-    width = slide_width - 2 * _SLIDE_MARGIN
-    top = Emu(cursor_top) + (_TITLE_GAP if cursor_top else Emu(0))
-    remaining_total = slide_height - top - _SLIDE_MARGIN
-    if remaining_total <= 0:
-        remaining_total = Emu(914400)
-    slots = max(slots_remaining, 1)
-    # выделяем этому слоту его долю от оставшегося места, за вычетом зазора между блоками
-    gaps = Emu(_TITLE_GAP * (slots - 1))
-    height = Emu(max(int((remaining_total - gaps) / slots), 914400 // 4))
-    new_cursor = int(top + height)
-    return (int(left), int(top), int(width), int(height)), new_cursor
+def _render_slide(slide, pattern: Pattern, slide_spec: SlideSpec, manifest: DesignManifest) -> None:
+    _strip_all_placeholders(slide)
+    slide_width = manifest.slide_width_emu
+    slide_height = manifest.slide_height_emu
+
+    title_z = title_zone(pattern)
+    if title_z is not None:
+        _render_title(slide, title_z, slide_spec.title, manifest, slide_width, slide_height)
+
+    assignments = assign_zones(pattern, slide_spec)
+    for assignment in assignments:
+        _render_zone(slide, assignment, manifest, slide_width, slide_height)
 
 
-def _placeholder_bbox(slide, idx: int | None) -> tuple[int, int, int, int]:
-    if idx is None:
-        # Страховочный путь — основной вызов теперь всегда передаёт явный
-        # bbox через _add_native_chart/_add_native_table.
-        return _FALLBACK_BBOX
-    placeholder = slide.placeholders[idx]
-    return placeholder.left, placeholder.top, placeholder.width, placeholder.height
+def _render_title(slide, zone: Zone, title_text: str, manifest: DesignManifest, sw: int, sh: int) -> None:
+    left, top, width, height = zone_bbox_emu(zone, sw, sh)
+    textbox = slide.shapes.add_textbox(left, top, width, height)
+    text_frame = textbox.text_frame
+    text_frame.word_wrap = True
+    text_frame.text = title_text
+    text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT
+    style_title_textbox(text_frame, manifest)
 
 
-def _remove_placeholder(slide, idx: int | None) -> None:
-    if idx is None:
+def _render_zone(slide, assignment: ZoneAssignment, manifest: DesignManifest, sw: int, sh: int) -> None:
+    block = assignment.block
+    if block is None:
         return
-    placeholder = slide.placeholders[idx]
-    placeholder._element.getparent().remove(placeholder._element)
+    bbox = zone_bbox_emu(assignment.zone, sw, sh)
+
+    if block.type in (ContentBlockType.BULLETS, ContentBlockType.TEXT):
+        _render_text_block(slide, bbox, block, manifest)
+    elif block.type == ContentBlockType.CHART:
+        _add_native_chart(slide, bbox, block, manifest)
+    elif block.type == ContentBlockType.TABLE:
+        _add_native_table(slide, bbox, block, manifest)
 
 
-def _add_native_chart(
-    slide,
-    idx: int | None,
-    block: ContentBlock,
-    manifest: DesignManifest,
-    bbox: tuple[int, int, int, int] | None = None,
-) -> None:
+def _render_text_block(slide, bbox: tuple[int, int, int, int], block: ContentBlock, manifest: DesignManifest) -> None:
+    left, top, width, height = bbox
+    textbox = slide.shapes.add_textbox(left, top, width, height)
+    text_frame = textbox.text_frame
+    text_frame.word_wrap = True
+
+    if block.type == ContentBlockType.BULLETS:
+        items = block.bullets or [""]
+        text_frame.text = items[0]
+        for extra in items[1:]:
+            p = text_frame.add_paragraph()
+            p.text = extra
+        for paragraph in text_frame.paragraphs:
+            paragraph.level = 0
+    else:
+        text_frame.text = block.text or ""
+
+    style_body_textbox(text_frame, manifest)
+    # Буллеты получают явный маркер — python-pptx не рисует его сам без
+    # <a:buChar>/<a:buAutoNum> в pPr, а голый текстовый фрейм по умолчанию
+    # выводит параграфы без каких-либо маркеров.
+    if block.type == ContentBlockType.BULLETS:
+        for paragraph in text_frame.paragraphs:
+            _set_bullet_char(paragraph)
+
+
+def _set_bullet_char(paragraph) -> None:
+    from pptx.oxml.ns import qn
+    from pptx.oxml import parse_xml
+
+    pPr = paragraph._p.get_or_add_pPr()
+    for tag in ("a:buChar", "a:buAutoNum", "a:buNone"):
+        existing = pPr.find(qn(tag))
+        if existing is not None:
+            pPr.remove(existing)
+    bu_char = parse_xml(
+        '<a:buChar xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" char="•"/>'
+    )
+    pPr.append(bu_char)
+
+
+def _add_native_chart(slide, bbox: tuple[int, int, int, int], block: ContentBlock, manifest: DesignManifest) -> None:
     if block.chart is None:
         return
-    left, top, width, height = bbox if bbox is not None else _placeholder_bbox(slide, idx)
-    _remove_placeholder(slide, idx)
+    left, top, width, height = bbox
 
     categories, series, _truncated = fit_chart_data(
         block.chart.categories, block.chart.series, width
@@ -313,17 +225,10 @@ def _add_native_chart(
     style_chart(graphic_frame.chart, manifest)
 
 
-def _add_native_table(
-    slide,
-    idx: int | None,
-    block: ContentBlock,
-    manifest: DesignManifest,
-    bbox: tuple[int, int, int, int] | None = None,
-) -> None:
+def _add_native_table(slide, bbox: tuple[int, int, int, int], block: ContentBlock, manifest: DesignManifest) -> None:
     if block.table is None:
         return
-    left, top, width, height = bbox if bbox is not None else _placeholder_bbox(slide, idx)
-    _remove_placeholder(slide, idx)
+    left, top, width, height = bbox
 
     headers, data_rows, _truncated = fit_table_data(
         block.table.headers,
