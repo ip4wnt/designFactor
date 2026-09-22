@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Тест-фронт: генератор презентаций</title>
+</head>
+<body>
+
+<h1>Тест-фронт генератора презентаций (минимальный, без стилей)</h1>
+
+<p>
+  Адрес backend API:
+  <input type="text" id="apiBase" value="http://127.0.0.1:8811" size="40">
+</p>
+
+<hr>
+
+<h2>1. Создать задачу (job)</h2>
+
+<form id="createJobForm">
+  <p>
+    Шаблон презентации (.pptx):<br>
+    <input type="file" id="templateFile" accept=".pptx" required>
+  </p>
+  <p>
+    Бриф:<br>
+    <textarea id="brief" rows="3" cols="60">Короткая презентация о нашем продукте</textarea>
+  </p>
+  <p>
+    Назначение (purpose):<br>
+    <input type="text" id="purpose" value="business" size="40">
+  </p>
+
+  <h3>Данные для слайдов (таблицы/графики) — выберите способ ввода</h3>
+
+  <p>
+    <label><input type="radio" name="dataMode" value="none" checked> Без данных (только LLM-контент по брифу, если backend настроен на LLM)</label><br>
+    <label><input type="radio" name="dataMode" value="json"> Готовый ContentPlan в виде JSON</label><br>
+    <label><input type="radio" name="dataMode" value="excel"> Excel-файл (данные будут добавлены после создания задачи)</label>
+  </p>
+
+  <div id="jsonModeBlock" style="display:none;">
+    <p>ContentPlan JSON (структура: brief/purpose/slides[].content_blocks[].table|chart):</p>
+    <textarea id="contentPlanJson" rows="14" cols="80">{
+  "brief": "Тест",
+  "purpose": "demo",
+  "slides": [
+    {
+      "slide_id": "slide-1",
+      "purpose": "intro",
+      "title": "Финансовые показатели",
+      "content_blocks": [
+        {
+          "type": "table",
+          "table": {
+            "headers": ["Показатель", "Q1", "Q2"],
+            "rows": [["Выручка", "100", "120"], ["Прибыль", "20", "25"]]
+          }
+        }
+      ]
+    },
+    {
+      "slide_id": "slide-2",
+      "purpose": "chart",
+      "title": "Динамика продаж",
+      "content_blocks": [
+        {
+          "type": "chart",
+          "chart": {
+            "chart_type": "line",
+            "categories": ["Янв", "Фев", "Мар"],
+            "series": {"Продажи": [5, 8, 12]}
+          }
+        }
+      ]
+    }
+  ]
+}</textarea>
+  </div>
+
+  <div id="excelModeBlock" style="display:none;">
+    <p>
+      Excel-файл (.xlsx) для последующей догрузки после создания задачи —
+      минимальный ContentPlan без блоков будет создан автоматически (один слайд slide-1):<br>
+      <input type="file" id="excelFileForCreate" accept=".xlsx">
+    </p>
+    <p>
+      Имя листа (пусто = первый лист):<br>
+      <input type="text" id="excelSheetNameForCreate" size="30">
+    </p>
+    <p>
+      Тип данных на листе:<br>
+      <select id="excelKindForCreate">
+        <option value="">Автоопределение</option>
+        <option value="table">Таблица</option>
+        <option value="chart">График</option>
+      </select>
+    </p>
+  </div>
+
+  <p><button type="submit">Создать задачу</button></p>
+</form>
+
+<pre id="createJobResult"></pre>
+
+<hr>
+
+<h2>2. Статус задачи</h2>
+
+<form id="statusForm">
+  <p>
+    Job ID:<br>
+    <input type="text" id="statusJobId" size="50">
+    <button type="submit">Проверить статус</button>
+    <button type="button" id="pollButton">Опрашивать каждые 2 сек</button>
+    <button type="button" id="stopPollButton">Остановить опрос</button>
+  </p>
+</form>
+
+<pre id="statusResult"></pre>
+
+<hr>
+
+<h2>3. Догрузить данные в слайд существующей задачи</h2>
+
+<form id="addDataForm">
+  <p>
+    Job ID:<br>
+    <input type="text" id="addDataJobId" size="50">
+  </p>
+  <p>
+    Slide ID:<br>
+    <input type="text" id="addDataSlideId" size="20" value="slide-1">
+  </p>
+
+  <p>
+    <label><input type="radio" name="addDataMode" value="json" checked> Добавить готовый JSON-блок (ContentBlock)</label><br>
+    <label><input type="radio" name="addDataMode" value="excel"> Добавить из Excel-файла</label>
+  </p>
+
+  <div id="addJsonBlock">
+    <p>ContentBlock JSON:</p>
+    <textarea id="addContentBlockJson" rows="8" cols="80">{
+  "type": "table",
+  "table": {
+    "headers": ["Показатель", "Значение"],
+    "rows": [["A", "1"], ["B", "2"]]
+  }
+}</textarea>
+  </div>
+
+  <div id="addExcelBlock" style="display:none;">
+    <p>
+      Excel-файл (.xlsx):<br>
+      <input type="file" id="addExcelFile" accept=".xlsx">
+    </p>
+    <p>
+      Имя листа (пусто = первый лист):<br>
+      <input type="text" id="addExcelSheetName" size="30">
+    </p>
+    <p>
+      Тип данных на листе:<br>
+      <select id="addExcelKind">
+        <option value="">Автоопределение</option>
+        <option value="table">Таблица</option>
+        <option value="chart">График</option>
+      </select>
+    </p>
+  </div>
+
+  <p><button type="submit">Добавить данные к слайду</button></p>
+</form>
+
+<pre id="addDataResult"></pre>
+
+<p>
+  После добавления данных к уже собранной задаче (статус done/failed) нужно вызвать
+  пересборку, чтобы Компоновщик учёл новый блок:
+</p>
+<p>
+  Важно: слайды шаблона имеют ограниченное число мест под таблицы/графики.
+  Если на один slide_id добавить больше блоков, чем есть подходящих плейсхолдеров
+  (например, две таблицы при одном табличном слоте), лишний блок будет размещён
+  в текстовый плейсхолдер и может визуально наложиться на другие элементы.
+  Для каждого нового набора данных лучше использовать отдельный slide_id.
+</p>
+<form id="fixForm">
+  <p>
+    Job ID:<br>
+    <input type="text" id="fixJobId" size="50">
+    <button type="submit">Пересобрать (POST /jobs/{id}/fix)</button>
+  </p>
+</form>
+<pre id="fixResult"></pre>
+
+<hr>
+
+<h2>4. Просмотреть листы Excel (без создания задачи)</h2>
+
+<form id="sheetsForm">
+  <p>
+    Excel-файл (.xlsx):<br>
+    <input type="file" id="sheetsFile" accept=".xlsx">
+    <button type="submit">Показать листы</button>
+  </p>
+</form>
+<pre id="sheetsResult"></pre>
+
+<hr>
+
+<h2>5. Скачать результат</h2>
+
+<form id="exportForm">
+  <p>
+    Job ID:<br>
+    <input type="text" id="exportJobId" size="50">
+  </p>
+  <p>
+    Формат:
+    <select id="exportFormat">
+      <option value="pptx">pptx</option>
+      <option value="pdf">pdf</option>
+      <option value="html">html</option>
+    </select>
+  </p>
+  <p><button type="submit">Скачать</button></p>
+</form>
+
+<script>
+function apiBase() {
+  return document.getElementById('apiBase').value.replace(/\/$/, '');
+}
+
+// --- Переключение режимов ввода данных при создании задачи ---
+document.querySelectorAll('input[name="dataMode"]').forEach(function (radio) {
+  radio.addEventListener('change', function () {
+    var mode = document.querySelector('input[name="dataMode"]:checked').value;
+    document.getElementById('jsonModeBlock').style.display = (mode === 'json') ? 'block' : 'none';
+    document.getElementById('excelModeBlock').style.display = (mode === 'excel') ? 'block' : 'none';
+  });
+});
+
+document.querySelectorAll('input[name="addDataMode"]').forEach(function (radio) {
+  radio.addEventListener('change', function () {
+    var mode = document.querySelector('input[name="addDataMode"]:checked').value;
+    document.getElementById('addJsonBlock').style.display = (mode === 'json') ? 'block' : 'none';
+    document.getElementById('addExcelBlock').style.display = (mode === 'excel') ? 'block' : 'none';
+  });
+});
+
+// --- 1. Создание задачи ---
+document.getElementById('createJobForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var out = document.getElementById('createJobResult');
+  out.textContent = 'Отправка...';
+
+  var templateFile = document.getElementById('templateFile').files[0];
+  if (!templateFile) {
+    out.textContent = 'Выберите файл шаблона .pptx';
+    return;
+  }
+
+  var mode = document.querySelector('input[name="dataMode"]:checked').value;
+
+  var formData = new FormData();
+  formData.append('template', templateFile);
+  formData.append('brief', document.getElementById('brief').value);
+  formData.append('purpose', document.getElementById('purpose').value);
+
+  if (mode === 'json') {
+    formData.append('content_plan', document.getElementById('contentPlanJson').value);
+  } else if (mode === 'excel') {
+    // Минимальный план-заглушка с одним пустым слайдом — данные из Excel
+    // догружаются отдельным запросом (шаг 3) после создания задачи, потому
+    // что один лист Excel соответствует одному content_block для одного слайда,
+    // а не целой презентации.
+    var stubPlan = {
+      brief: document.getElementById('brief').value,
+      purpose: document.getElementById('purpose').value,
+      slides: [
+        { slide_id: 'slide-1', purpose: 'data', title: 'Данные из Excel', content_blocks: [] }
+      ]
+    };
+    formData.append('content_plan', JSON.stringify(stubPlan));
+  }
+  // mode === 'none' -> content_plan не передаём, backend сам вызовет LLM-контент-агента
+
+  try {
+    var resp = await fetch(apiBase() + '/jobs', { method: 'POST', body: formData });
+    var data = await resp.json();
+    out.textContent = JSON.stringify(data, null, 2);
+
+    if (resp.ok && data.job_id) {
+      document.getElementById('statusJobId').value = data.job_id;
+      document.getElementById('addDataJobId').value = data.job_id;
+      document.getElementById('fixJobId').value = data.job_id;
+      document.getElementById('exportJobId').value = data.job_id;
+
+      // Если выбран режим Excel — сразу догружаем файл в slide-1.
+      if (mode === 'excel') {
+        var excelFile = document.getElementById('excelFileForCreate').files[0];
+        if (excelFile) {
+          out.textContent += '\n\nЗадача создана, догружаю Excel в slide-1...';
+          var excelForm = new FormData();
+          excelForm.append('file', excelFile);
+          var sheetName = document.getElementById('excelSheetNameForCreate').value;
+          var kind = document.getElementById('excelKindForCreate').value;
+          if (sheetName) excelForm.append('sheet_name', sheetName);
+          if (kind) excelForm.append('kind', kind);
+
+          var importResp = await fetch(
+            apiBase() + '/jobs/' + data.job_id + '/slides/slide-1/import-excel',
+            { method: 'POST', body: excelForm }
+          );
+          var importData = await importResp.json();
+          out.textContent += '\n\nРезультат импорта Excel:\n' + JSON.stringify(importData, null, 2);
+
+          if (importResp.ok) {
+            out.textContent += '\n\nТеперь вызовите "Пересобрать" (раздел 3) для job_id ' + data.job_id + ', чтобы применить данные.';
+          }
+        } else {
+          out.textContent += '\n\nВНИМАНИЕ: файл Excel не выбран, слайд slide-1 останется без данных.';
+        }
+      }
+    }
+  } catch (err) {
+    out.textContent = 'Ошибка запроса: ' + err;
+  }
+});
+
+// --- 2. Статус задачи ---
+var pollTimer = null;
+
+async function checkStatus() {
+  var jobId = document.getElementById('statusJobId').value.trim();
+  var out = document.getElementById('statusResult');
+  if (!jobId) {
+    out.textContent = 'Укажите Job ID';
+    return;
+  }
+  try {
+    var resp = await fetch(apiBase() + '/jobs/' + jobId);
+    var data = await resp.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    out.textContent = 'Ошибка запроса: ' + err;
+  }
+}
+
+document.getElementById('statusForm').addEventListener('submit', function (e) {
+  e.preventDefault();
+  checkStatus();
+});
+
+document.getElementById('pollButton').addEventListener('click', function () {
+  if (pollTimer) clearInterval(pollTimer);
+  checkStatus();
+  pollTimer = setInterval(checkStatus, 2000);
+});
+
+document.getElementById('stopPollButton').addEventListener('click', function () {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+});
+
+// --- 3. Догрузка данных в слайд ---
+document.getElementById('addDataForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var out = document.getElementById('addDataResult');
+  var jobId = document.getElementById('addDataJobId').value.trim();
+  var slideId = document.getElementById('addDataSlideId').value.trim();
+  var mode = document.querySelector('input[name="addDataMode"]:checked').value;
+
+  if (!jobId || !slideId) {
+    out.textContent = 'Укажите Job ID и Slide ID';
+    return;
+  }
+
+  out.textContent = 'Отправка...';
+
+  try {
+    var resp, data;
+    if (mode === 'json') {
+      var blockText = document.getElementById('addContentBlockJson').value;
+      var blockObj;
+      try {
+        blockObj = JSON.parse(blockText);
+      } catch (parseErr) {
+        out.textContent = 'Невалидный JSON: ' + parseErr;
+        return;
+      }
+      resp = await fetch(
+        apiBase() + '/jobs/' + jobId + '/slides/' + slideId + '/content-block',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ block: blockObj })
+        }
+      );
+    } else {
+      var excelFile = document.getElementById('addExcelFile').files[0];
+      if (!excelFile) {
+        out.textContent = 'Выберите файл Excel';
+        return;
+      }
+      var formData = new FormData();
+      formData.append('file', excelFile);
+      var sheetName = document.getElementById('addExcelSheetName').value;
+      var kind = document.getElementById('addExcelKind').value;
+      if (sheetName) formData.append('sheet_name', sheetName);
+      if (kind) formData.append('kind', kind);
+
+      resp = await fetch(
+        apiBase() + '/jobs/' + jobId + '/slides/' + slideId + '/import-excel',
+        { method: 'POST', body: formData }
+      );
+    }
+    data = await resp.json();
+    out.textContent = JSON.stringify(data, null, 2);
+    if (resp.ok) {
+      out.textContent += '\n\nНе забудьте вызвать "Пересобрать" ниже, чтобы применить изменения к .pptx.';
+    }
+  } catch (err) {
+    out.textContent = 'Ошибка запроса: ' + err;
+  }
+});
+
+// --- Пересборка (fix) ---
+document.getElementById('fixForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var out = document.getElementById('fixResult');
+  var jobId = document.getElementById('fixJobId').value.trim();
+  if (!jobId) {
+    out.textContent = 'Укажите Job ID';
+    return;
+  }
+  out.textContent = 'Отправка...';
+  try {
+    var resp = await fetch(apiBase() + '/jobs/' + jobId + '/fix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ issue_ids: [] })
+    });
+    var data = await resp.json();
+    out.textContent = JSON.stringify(data, null, 2) + '\n\nПроверьте статус в разделе 2 — пересборка идёт в фоне.';
+  } catch (err) {
+    out.textContent = 'Ошибка запроса: ' + err;
+  }
+});
+
+// --- 4. Просмотр листов Excel ---
+document.getElementById('sheetsForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var out = document.getElementById('sheetsResult');
+  var file = document.getElementById('sheetsFile').files[0];
+  if (!file) {
+    out.textContent = 'Выберите файл Excel';
+    return;
+  }
+  out.textContent = 'Отправка...';
+  var formData = new FormData();
+  formData.append('file', file);
+  try {
+    var resp = await fetch(apiBase() + '/excel/sheets', { method: 'POST', body: formData });
+    var data = await resp.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    out.textContent = 'Ошибка запроса: ' + err;
+  }
+});
+
+// --- 5. Экспорт результата ---
+document.getElementById('exportForm').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var jobId = document.getElementById('exportJobId').value.trim();
+  var format = document.getElementById('exportFormat').value;
+  if (!jobId) {
+    alert('Укажите Job ID');
+    return;
+  }
+  window.open(apiBase() + '/jobs/' + jobId + '/export?format=' + format, '_blank');
+});
+</script>
+
+</body>
+</html>

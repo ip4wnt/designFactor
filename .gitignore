@@ -1,0 +1,11 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+node_modules/
+.next/
+storage/
+.idea/
+pptx_template_parser_generator/sample_templates/
+*.pptx
