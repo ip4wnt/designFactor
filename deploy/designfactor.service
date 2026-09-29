@@ -1,0 +1,24 @@
+# /etc/systemd/system/designfactor.service — backend «AI-дизайнера презентаций».
+# Лимиты рассчитаны на VM 4 vCPU / 16 ГБ. soffice и pdftoppm — дочерние
+# процессы и учитываются в той же cgroup. MemoryHigh — мягкий порог (ядро
+# вытесняет страницы только этого сервиса), MemoryMax — жёсткий: OOM-kill
+# внутри cgroup и автоперезапуск сервиса вместо зависания всей машины.
+[Unit]
+Description=DesignFactor backend
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pankratov/designfactor/backend
+EnvironmentFile=/home/pankratov/designfactor/backend/.env
+ExecStart=/home/pankratov/designfactor/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8811
+Restart=always
+RestartSec=3
+User=pankratov
+MemoryHigh=10G
+MemoryMax=12G
+OOMPolicy=kill
+TasksMax=1024
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+# /etc/default/earlyoom — пользовательский OOM-киллер (слой 4).
+# Срабатывает при свободной памяти < 5 % (и swap < 10 %), убивает самый
+# крупный процесс, предпочитая наши тяжёлые (soffice, uvicorn, pdftoppm)
+# и никогда не трогая sshd/nginx/systemd — SSH остаётся доступен.
+# Кавычек внутри значений нет намеренно: systemd подставляет $EARLYOOM_ARGS
+# без разбора кавычек.
+EARLYOOM_ARGS="-m 5 -s 10 -r 300 --prefer ^(soffice|soffice\.bin|oosplash|uvicorn|pdftoppm)$ --avoid ^(sshd|nginx|systemd|systemd-.*|init|mms|aakore)$"

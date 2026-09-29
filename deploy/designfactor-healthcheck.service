@@ -1,0 +1,6 @@
+[Unit]
+Description=DesignFactor backend healthcheck (curl /docs, restart after 3 failures)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/designfactor-healthcheck.sh

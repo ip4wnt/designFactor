@@ -39,6 +39,17 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_SLIDE_COUNT = 10
 
+# Ограничитель тяжёлых стадий (см. Settings.JOB_CONCURRENCY). Создаётся лениво,
+# уже внутри работающего event loop.
+_heavy_slots: asyncio.Semaphore | None = None
+
+
+def _heavy_slot() -> asyncio.Semaphore:
+    global _heavy_slots
+    if _heavy_slots is None:
+        _heavy_slots = asyncio.Semaphore(max(1, get_settings().JOB_CONCURRENCY))
+    return _heavy_slots
+
 
 async def run_pipeline(
     job: Job,
@@ -62,44 +73,45 @@ async def run_pipeline(
     """
     settings = get_settings()
     try:
-        job.status = JobStatus.PARSING
-        # design_manifest может быть уже заполнен, если job создан через
-        # template_analysis_id (см. POST /jobs в api/routes.py) — тогда используется
-        # уже проанализированный (возможно, вручную отредактированный) манифест
-        # как есть, без повторного разбора .pptx.
-        if job.design_manifest is None:
-            job.design_manifest = parser.parse_template(job.template_path)
-        template = await asyncio.to_thread(template_engine.build_template_json, job.template_path)
-        job.template_json_path = str(_persist_template_json(job, settings, template))
+        async with _heavy_slot():  # пока нет свободного слота — job остаётся queued
+            job.status = JobStatus.PARSING
+            # design_manifest может быть уже заполнен, если job создан через
+            # template_analysis_id (см. POST /jobs в api/routes.py) — тогда используется
+            # уже проанализированный (возможно, вручную отредактированный) манифест
+            # как есть, без повторного разбора .pptx.
+            if job.design_manifest is None:
+                job.design_manifest = parser.parse_template(job.template_path)
+            template = await asyncio.to_thread(template_engine.build_template_json, job.template_path)
+            job.template_json_path = str(_persist_template_json(job, settings, template))
 
-        job.status = JobStatus.PLANNING
-        target_slides = slide_count or _DEFAULT_SLIDE_COUNT
-        model = template_engine.BackendModel(settings.LLM_BASE_URL, settings.LLM_MODEL_NAME, settings.LLM_API_KEY)
-        # Сначала контент-агент (структура и содержание слайдов), затем
-        # планировщик макетов получает эту структуру как бриф — иначе два
-        # независимых прохода LLM дают две разные истории, и графики/таблицы
-        # из ContentPlan попадают не на «свои» слайды.
-        if content_plan is None:
-            content_plan = await content_agent.generate_content_plan(
-                brief=job.brief,
-                purpose=job.purpose,
-                slide_count=target_slides,
-                case_prompt_addition=case_prompt_addition,
-                slide_count_max=slide_count_max,
-            )
-        job.content_plan = content_plan
-        # Драматургия: структурированные тексты (один вызов модели на колоду,
-        # с детерминированным запасным вариантом) → композиции выбираются
-        # правилами в _assemble_one_variant. План по макетам старого
-        # планировщика строится лениво, только если драматургия не справилась.
-        structured = await asyncio.to_thread(dramaturgy.structure_content, content_plan, job.brief, model)
-        _persist_json(settings.outputs_dir / job.job_id / "structured.json", structured)
-        layout_plan = None
+            job.status = JobStatus.PLANNING
+            target_slides = slide_count or _DEFAULT_SLIDE_COUNT
+            model = template_engine.BackendModel(settings.LLM_BASE_URL, settings.LLM_MODEL_NAME, settings.LLM_API_KEY)
+            # Сначала контент-агент (структура и содержание слайдов), затем
+            # планировщик макетов получает эту структуру как бриф — иначе два
+            # независимых прохода LLM дают две разные истории, и графики/таблицы
+            # из ContentPlan попадают не на «свои» слайды.
+            if content_plan is None:
+                content_plan = await content_agent.generate_content_plan(
+                    brief=job.brief,
+                    purpose=job.purpose,
+                    slide_count=target_slides,
+                    case_prompt_addition=case_prompt_addition,
+                    slide_count_max=slide_count_max,
+                )
+            job.content_plan = content_plan
+            # Драматургия: структурированные тексты (один вызов модели на колоду,
+            # с детерминированным запасным вариантом) → композиции выбираются
+            # правилами в _assemble_one_variant. План по макетам старого
+            # планировщика строится лениво, только если драматургия не справилась.
+            structured = await asyncio.to_thread(dramaturgy.structure_content, content_plan, job.brief, model)
+            _persist_json(settings.outputs_dir / job.job_id / "structured.json", structured)
+            layout_plan = None
 
-        job.status = JobStatus.ASSEMBLING
-        await _assemble_all_variants(job, settings, template=template, layout_plan=layout_plan)
+            job.status = JobStatus.ASSEMBLING
+            await _assemble_all_variants(job, settings, template=template, layout_plan=layout_plan)
 
-        job.status = JobStatus.AWAITING_VARIANT_CHOICE
+            job.status = JobStatus.AWAITING_VARIANT_CHOICE
     except Exception as exc:  # noqa: BLE001 — любая ошибка стадии должна перевести job в failed
         logger.exception("Пайплайн упал для job %s", job.job_id)
         job.status = JobStatus.FAILED
@@ -127,7 +139,8 @@ async def run_audit_for_selected_variant(job: Job) -> None:
         return
     try:
         job.status = JobStatus.AUDITING
-        await _run_audit_one_variant(job, settings, variant)
+        async with _heavy_slot():
+            await _run_audit_one_variant(job, settings, variant)
         job.audit_skipped = False
         job.audit_stale = False
         job.status = JobStatus.DONE
@@ -198,16 +211,17 @@ async def rerun_assembly(job: Job, variant: str | None = None) -> None:
     settings = get_settings()
     try:
         job.status = JobStatus.ASSEMBLING
-        if variant is None:
-            await _assemble_all_variants(job, settings)
-            job.selected_variant = None
-            job.audit_issues = {}
-            job.audit_skipped = False
-            job.status = JobStatus.AWAITING_VARIANT_CHOICE
-        else:
-            await asyncio.to_thread(_assemble_one_variant, job, settings, variant)
-            job.audit_issues.pop(variant, None)
-            job.status = JobStatus.AWAITING_AUDIT_CHOICE
+        async with _heavy_slot():
+            if variant is None:
+                await _assemble_all_variants(job, settings)
+                job.selected_variant = None
+                job.audit_issues = {}
+                job.audit_skipped = False
+                job.status = JobStatus.AWAITING_VARIANT_CHOICE
+            else:
+                await asyncio.to_thread(_assemble_one_variant, job, settings, variant)
+                job.audit_issues.pop(variant, None)
+                job.status = JobStatus.AWAITING_AUDIT_CHOICE
     except Exception as exc:  # noqa: BLE001
         logger.exception("Пере-сборка упала для job %s", job.job_id)
         job.status = JobStatus.FAILED

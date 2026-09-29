@@ -148,6 +148,7 @@ Qwen3.8-27B — см. [MODELS.md](MODELS.md).
 | `LLM_MODEL_NAME` | `gpt-4o-mini` | идентификатор модели у провайдера; прод — `qwen/qwen3.8-27b` |
 | `LLM_API_KEY` | пусто | ключ; пусто — заголовок `Authorization` не отправляется (локальные Ollama/vLLM) |
 | `LLM_PLANNING_TIMEOUT_S` | `120` | общий дедлайн вызова LLM на этапе планирования, с (включая повторы); при «Превышен общий дедлайн LLM» — 180 |
+| `JOB_CONCURRENCY` | `3` | сколько тяжёлых стадий (генерация трёх вариантов, пересборка, аудит с рендером) выполняется одновременно; остальные задачи ждут в `queued`. Ориентир: ~3 ГБ памяти на задачу (4 ГБ RAM → 1, 16 ГБ → 3) |
 | `LLM_AUDIT_FIX_TIMEOUT_S` | `45` | дедлайн LLM-правок по результатам аудита, с |
 | `VLM_BASE_URL` | `http://localhost:11434/v1` | эндпоинт vision-модели для «Валидации контента»; можно указать те же значения, что для LLM, если модель понимает картинки |
 | `VLM_MODEL_NAME` | `gpt-4o-mini` | идентификатор VLM |
@@ -163,6 +164,7 @@ LLM_BASE_URL=https://api.alltokens.ru/api/v1
 LLM_MODEL_NAME=qwen/qwen3.8-27b
 LLM_API_KEY=...
 LLM_PLANNING_TIMEOUT_S=120
+JOB_CONCURRENCY=3
 VLM_BASE_URL=https://api.alltokens.ru/api/v1
 VLM_MODEL_NAME=qwen/qwen3.8-27b
 VLM_API_KEY=...
@@ -201,7 +203,8 @@ curl -o result.pptx "http://127.0.0.1:8811/jobs/$JOB/export?format=pptx&variant=
 ### 4. Продуктивный контур (как развёрнута рабочая версия)
 
 - `systemd`-сервис запускает `venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8811`
-  из `backend/`.
+  из `backend/`; unit-файл с лимитами памяти и инструкция по swap — в
+  [`deploy/`](deploy/README.md).
 - nginx раздаёт `frontend/` как статику и проксирует на `127.0.0.1:8811`
   пути `/jobs`, `/templates`, `/excel`, `/docs`, `/openapi.json`;
   `client_max_body_size 200M` для крупных шаблонов.
@@ -259,9 +262,14 @@ cd pptx_template_parser_generator && python -m pytest -q tests
   перезапуске backend; интерфейс помнит последнюю задачу в `localStorage`.
   Осознанное упрощение прототипа: монолит без БД и очередей.
 - **Один процесс, без воркеров.** Каждая задача — `asyncio`-таск; сборка трёх
-  вариантов идёт в thread-pool. Параллельная нагрузка ограничена одним
-  процессом; на 2 vCPU / 2 GB полный цикл до трёх вариантов ≈ 1,5–3 мин,
-  из них большая часть — ожидание LLM.
+  вариантов идёт в thread-pool. Тяжёлые стадии (генерация, пересборка, аудит)
+  ограничены `JOB_CONCURRENCY` одновременных задач, остальные ждут в `queued`;
+  на 4 vCPU полный цикл до трёх вариантов ≈ 1,5–3 мин, из них большая
+  часть — ожидание LLM. Страховка от исчерпания памяти — пять слоёв, описанных
+  в [`deploy/README.md`](deploy/README.md): очередь задач, cgroup-лимиты
+  сервиса, swap, earlyoom и самопроверка по таймеру. Без них три параллельные
+  генерации с LibreOffice на VM с 2 ГБ однажды довели сервер до зависания
+  до аппаратной перезагрузки.
 - **LibreOffice — внешняя зависимость.** Превью, PDF, HTML и PNG для VLM-аудита
   требуют `soffice` и `pdftoppm`; запуски сериализованы глобальным замком
   (параллельные конвертации роняли soffice). Превью может отличаться шрифтами

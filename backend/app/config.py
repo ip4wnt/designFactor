@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     LLM_PLANNING_TIMEOUT_S: float = 120.0
     # Дедлайн LLM-правок по результатам аудита (audit_fix), секунды.
     LLM_AUDIT_FIX_TIMEOUT_S: float = 45.0
+    # Сколько тяжёлых стадий (разбор шаблона + сборка трёх вариантов, пересборка,
+    # аудит с рендером) выполняется одновременно. Остальные задачи ждут в
+    # статусе queued. Ориентир — ~3 ГБ памяти на задачу: на VM с 2 ГБ без
+    # лимита три параллельных генерации с LibreOffice довели машину до
+    # исчерпания памяти и зависания до аппаратной перезагрузки.
+    JOB_CONCURRENCY: int = 3
 
     VLM_BASE_URL: str = "http://localhost:11434/v1"
     VLM_MODEL_NAME: str = "gpt-4o-mini"
