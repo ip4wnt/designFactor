@@ -28,7 +28,7 @@ from typing import Any, Literal
 
 import openpyxl
 
-from app.schemas.content_plan import ChartData, ChartType, TableData
+from app.schemas.content_plan import ChartData, ChartSeries, ChartType, TableData
 
 MAX_ROWS = 500
 MAX_COLS = 50
@@ -108,10 +108,12 @@ def sheet_to_table_data(sheet_name: str, rows: list[list[Any]]) -> TableData:
 
 
 def sheet_to_chart_data(sheet_name: str, rows: list[list[Any]], chart_type: ChartType = ChartType.BAR) -> ChartData | None:
-    """Возвращает None (вместо бросания исключения) если данные не числовые —
-    вызывающая сторона тогда откатывается на TableData."""
+    """Возвращает None для нечисловых данных или повторяющихся имён серий —
+    вызывающая сторона откатывается на TableData либо сообщает ошибку."""
     header_row, *data_rows = rows
     series_names = [_cell_to_str(v) or f"series_{i + 1}" for i, v in enumerate(header_row[1:], start=1)]
+    if len(series_names) != len(set(series_names)):
+        return None  # не объединяем столбцы с одинаковыми заголовками
 
     categories: list[str] = []
     series_values: dict[str, list[float]] = {name: [] for name in series_names}
@@ -129,7 +131,14 @@ def sheet_to_chart_data(sheet_name: str, rows: list[list[Any]], chart_type: Char
     if not categories or not series_names:
         return None
 
-    return ChartData(chart_type=chart_type, categories=categories, series=series_values)
+    return ChartData(
+        chart_type=chart_type,
+        categories=categories,
+        series=[
+            ChartSeries(name=name, values=values)
+            for name, values in series_values.items()
+        ],
+    )
 
 
 def import_excel_block(
@@ -152,7 +161,8 @@ def import_excel_block(
         chart = sheet_to_chart_data(resolved_name, rows, chart_type)
         if chart is None:
             raise ExcelImportError(
-                f"Лист «{resolved_name}» запрошен как график, но содержит нечисловые значения"
+                f"Лист «{resolved_name}» запрошен как график: нужны непустые "
+                "числовые ряды с уникальными заголовками серий"
             )
         return "chart", chart
 

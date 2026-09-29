@@ -164,10 +164,149 @@ def _style_cell_text_raw(cell, color: RGBColor, font_name: str, size_pt: int, bo
             run.font.color.rgb = color
 
 
-def style_chart(chart, manifest: DesignManifest) -> None:
-    """Красит серии нативного python-pptx графика в порядок accent1..accent6 темы."""
+_A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_P_NS = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+
+
+def _scheme_hex(prs, name: str) -> str | None:
+    """HEX цвета схемы темы (bg1/tx1 → lt1/dk1) первого мастера."""
+    aliases = {"bg1": "lt1", "tx1": "dk1", "bg2": "lt2", "tx2": "dk2"}
+    name = aliases.get(name, name)
+    try:
+        theme_part = prs.slide_masters[0].part.part_related_by(
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"
+        )
+        from lxml import etree
+
+        root = etree.fromstring(theme_part.blob)
+        node = root.find(f".//{_A_NS}clrScheme/{_A_NS}{name}")
+        if node is None:
+            return None
+        srgb = node.find(f"{_A_NS}srgbClr")
+        if srgb is not None:
+            return srgb.get("val")
+        sys_ = node.find(f"{_A_NS}sysClr")
+        if sys_ is not None:
+            return sys_.get("lastClr")
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _fill_luminance(fill_parent, prs) -> float | None:
+    """Светимость сплошной заливки (a:solidFill) внутри элемента, если она есть."""
+    solid = fill_parent.find(f"{_A_NS}solidFill")
+    if solid is None:
+        return None
+    srgb = solid.find(f"{_A_NS}srgbClr")
+    if srgb is not None and srgb.get("val"):
+        return _relative_luminance(_hex_to_rgbcolor(srgb.get("val")))
+    scheme = solid.find(f"{_A_NS}schemeClr")
+    if scheme is not None:
+        hex_value = _scheme_hex(prs, scheme.get("val") or "")
+        if hex_value:
+            lum = _relative_luminance(_hex_to_rgbcolor(hex_value))
+            mod = scheme.find(f"{_A_NS}lumMod")
+            off = scheme.find(f"{_A_NS}lumOff")
+            if mod is not None or off is not None:
+                lum = lum * (int(mod.get("val")) / 100000 if mod is not None else 1) + (int(off.get("val")) / 100000 if off is not None else 0)
+            return max(0.0, min(1.0, lum))
+    return None
+
+
+def _picture_luminance(part, blob_rel_id: str) -> float | None:
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        image_part = part.related_part(blob_rel_id)
+        image = Image.open(BytesIO(image_part.blob)).convert("L")
+        image.thumbnail((64, 64))
+        pixels = list(image.getdata())
+        return (sum(pixels) / len(pixels)) / 255 if pixels else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def background_luminance(slide) -> float:
+    """Оценка светимости фона слайда (0 — чёрный, 1 — белый).
+
+    Порядок: заливка фона слайда → макета → мастера; картинка почти на весь
+    слайд (на слайде/макете/мастере) → средняя яркость картинки; иначе lt1 темы.
+    """
+    prs = slide.part.package.presentation_part.presentation
+    slide_area = int(prs.slide_width) * int(prs.slide_height)
+    chain = [slide, slide.slide_layout, slide.slide_layout.slide_master]
+    for holder in chain:
+        bg = holder._element.find(f"{_P_NS}cSld/{_P_NS}bg")
+        if bg is not None:
+            bg_pr = bg.find(f"{_P_NS}bgPr")
+            if bg_pr is not None:
+                lum = _fill_luminance(bg_pr, prs)
+                if lum is not None:
+                    return lum
+                blip = bg_pr.find(f".//{_A_NS}blip")
+                if blip is not None and blip.get(f"{{http://schemas.openxmlformats.org/officeDocument/2006/relationships}}embed"):
+                    lum = _picture_luminance(holder.part, blip.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"))
+                    if lum is not None:
+                        return lum
+            bg_ref = bg.find(f"{_P_NS}bgRef")
+            if bg_ref is not None:
+                scheme = bg_ref.find(f"{_A_NS}schemeClr")
+                if scheme is not None:
+                    hex_value = _scheme_hex(prs, scheme.get("val") or "")
+                    if hex_value:
+                        return _relative_luminance(_hex_to_rgbcolor(hex_value))
+        # Картинка/плашка почти на весь слайд
+        for shape in holder.shapes:
+            try:
+                area = int(shape.width) * int(shape.height)
+            except (TypeError, ValueError):
+                continue
+            if area < 0.75 * slide_area:
+                continue
+            if shape.shape_type is not None and "PICTURE" in str(shape.shape_type):
+                blip = shape._element.find(f".//{_A_NS}blip")
+                rid = blip.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed") if blip is not None else None
+                if rid:
+                    lum = _picture_luminance(holder.part, rid)
+                    if lum is not None:
+                        return lum
+            sppr = shape._element.find(f"{_P_NS}spPr")
+            if sppr is not None:
+                lum = _fill_luminance(sppr, prs)
+                if lum is not None:
+                    return lum
+    hex_value = _scheme_hex(prs, "lt1")
+    return _relative_luminance(_hex_to_rgbcolor(hex_value)) if hex_value else 1.0
+
+
+def slide_is_dark(slide) -> bool:
+    return background_luminance(slide) < 0.35
+
+
+def style_chart(chart, manifest: DesignManifest, dark: bool | None = None, slide=None) -> None:
+    """Красит серии нативного python-pptx графика в порядок accent1..accent6 темы.
+
+    Текст графика (оси, легенда, подписи данных) — контрастный к фону слайда:
+    на тёмном фоне светлый, на светлом — тёмный. Подписи данных включены,
+    жирные и чуть крупнее легенды; легенда снизу.
+    """
     colors = accent_colors(manifest)
     plot = chart.plots[0]
+    if dark is None and slide is not None:
+        try:
+            dark = slide_is_dark(slide)
+        except Exception:  # noqa: BLE001
+            dark = False
+    dark = bool(dark)
+    text_color = _hex_to_rgbcolor(manifest.palette.get("lt1"), "FFFFFF") if dark else _hex_to_rgbcolor(manifest.palette.get("dk1"), "1B1B1F")
+    if dark and _relative_luminance(text_color) < 0.5:
+        text_color = RGBColor(0xFF, 0xFF, 0xFF)
+    if not dark and _relative_luminance(text_color) > 0.5:
+        text_color = RGBColor(0x1B, 0x1B, 0x1F)
+    grid_color = RGBColor(0x5A, 0x5F, 0x6B) if dark else RGBColor(0xD0, 0xD4, 0xDC)
 
     for series_idx, series in enumerate(plot.series):
         color = colors[series_idx % len(colors)]
@@ -188,31 +327,183 @@ def style_chart(chart, manifest: DesignManifest) -> None:
     chart_font_size = (
         (manifest.chart_style.font_size if manifest.chart_style else None) or manifest.typography.body.size
     )
+    base_size = max(chart_font_size - 2, 8)
     try:
         chart.font.name = chart_font_name
-        chart.font.size = Pt(max(chart_font_size - 2, 8))
+        chart.font.size = Pt(base_size)
+        chart.font.color.rgb = text_color
     except AttributeError:
         pass
 
-    if chart.has_legend:
-        chart.legend.font.name = chart_font_name
-        chart.legend.font.size = Pt(max(chart_font_size - 2, 8))
+    # Легенда: снизу, контрастная; для одной серии не нужна
+    try:
+        if len(list(plot.series)) <= 1:
+            chart.has_legend = False
+        else:
+            from pptx.enum.chart import XL_LEGEND_POSITION
+
+            chart.has_legend = True
+            chart.legend.position = XL_LEGEND_POSITION.BOTTOM
+            chart.legend.include_in_layout = False
+            chart.legend.font.name = chart_font_name
+            chart.legend.font.size = Pt(base_size)
+            chart.legend.font.color.rgb = text_color
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Оси: подписи контрастные, сетка приглушённая
+    for axis_name in ("category_axis", "value_axis"):
+        try:
+            axis = getattr(chart, axis_name)
+        except Exception:  # noqa: BLE001
+            continue
+        try:
+            axis.tick_labels.font.name = chart_font_name
+            axis.tick_labels.font.size = Pt(base_size)
+            axis.tick_labels.font.color.rgb = text_color
+            axis.format.line.color.rgb = grid_color
+            if axis.has_major_gridlines:
+                axis.major_gridlines.format.line.color.rgb = grid_color
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Подписи данных: значения на узлах/столбцах, жирные, чуть крупнее легенды
+    try:
+        from pptx.enum.chart import XL_LABEL_POSITION
+
+        plot.has_data_labels = True
+        labels = plot.data_labels
+        labels.show_value = True
+        labels.font.name = chart_font_name
+        labels.font.size = Pt(base_size + 2)
+        labels.font.bold = True
+        labels.font.color.rgb = text_color
+        labels.number_format = "#,##0.##"
+        labels.number_format_is_linked = False
+        chart_type = str(getattr(chart, "chart_type", ""))
+        if "LINE" in chart_type:
+            labels.position = XL_LABEL_POSITION.ABOVE
+        elif "PIE" in chart_type or "DOUGHNUT" in chart_type:
+            labels.position = XL_LABEL_POSITION.OUTSIDE_END
+        elif "COLUMN" in chart_type or "BAR" in chart_type:
+            labels.position = XL_LABEL_POSITION.OUTSIDE_END
+    except Exception:  # noqa: BLE001
+        pass
+    # Линейный график: точки-маркеры на узлах
+    try:
+        if "LINE" in str(getattr(chart, "chart_type", "")):
+            from pptx.enum.chart import XL_MARKER_STYLE
+
+            for series_idx, series in enumerate(plot.series):
+                series.smooth = False
+                series.marker.style = XL_MARKER_STYLE.CIRCLE
+                series.marker.size = 7
+                series.marker.format.fill.solid()
+                series.marker.format.fill.fore_color.rgb = colors[series_idx % len(colors)]
+                series.marker.format.line.color.rgb = colors[series_idx % len(colors)]
+    except Exception:  # noqa: BLE001
+        pass
 
 
-def style_title_textbox(text_frame, manifest: DesignManifest) -> None:
-    """Красит текстовый фрейм заголовка в стиль темы (typography.title)."""
+def style_title_textbox(text_frame, manifest: DesignManifest, box_width_emu: int | None = None, box_height_emu: int | None = None) -> None:
+    """Красит текстовый фрейм заголовка в стиль темы (typography.title).
+
+    Если переданы размеры бокса — заранее уменьшает кегль так, чтобы обёрнутый
+    текст гарантированно поместился по высоте (см. _fit_font_size_pt). Это
+    страхует от переполнения в рендерерах (LibreOffice/аудит-превью), которые
+    не всегда пересчитывают <a:normAutofit> динамически, как это делает сам
+    PowerPoint при открытии файла.
+    """
     style = manifest.typography.title
     color = _hex_to_rgbcolor(manifest.palette.get("dk1"), "000000")
+    size_pt = style.size
+    if box_width_emu and box_height_emu:
+        text = text_frame.text
+        size_pt = _fit_font_size_pt(text, style.size, box_width_emu, box_height_emu, bold=style.bold)
     for paragraph in text_frame.paragraphs:
-        _apply_run_style(paragraph, style.font, style.size, style.bold, color)
+        _apply_run_style(paragraph, style.font, size_pt, style.bold, color)
+    _enable_shrink_to_fit(text_frame)
 
 
-def style_body_textbox(text_frame, manifest: DesignManifest, bold: bool | None = None) -> None:
+def style_body_textbox(text_frame, manifest: DesignManifest, bold: bool | None = None, box_width_emu: int | None = None, box_height_emu: int | None = None) -> None:
     """Красит текстовый фрейм тела (буллеты/текст) в стиль темы (typography.body)."""
     style = manifest.typography.body
     color = _hex_to_rgbcolor(manifest.palette.get("dk1"), "000000")
+    size_pt = style.size
+    if box_width_emu and box_height_emu:
+        text = "\n".join(p.text for p in text_frame.paragraphs)
+        size_pt = _fit_font_size_pt(text, style.size, box_width_emu, box_height_emu, bold=bool(bold))
     for paragraph in text_frame.paragraphs:
-        _apply_run_style(paragraph, style.font, style.size, bold if bold is not None else style.bold, color)
+        _apply_run_style(paragraph, style.font, size_pt, bold if bold is not None else style.bold, color)
+    _enable_shrink_to_fit(text_frame)
+
+
+def _enable_shrink_to_fit(text_frame) -> None:
+    """Включает <a:normAutofit> вместо <a:spAutoFit> — PowerPoint будет сам
+    уменьшать кегль, если текст всё равно не влезет (например, после ручного
+    редактирования), вместо того чтобы расширять рамку и наезжать на соседние
+    зоны."""
+    from pptx.oxml.ns import qn
+
+    body_pr = text_frame._txBody.find(qn("a:bodyPr"))
+    if body_pr is None:
+        return
+    for tag in ("a:spAutoFit", "a:noAutofit", "a:normAutofit"):
+        existing = body_pr.find(qn(tag))
+        if existing is not None:
+            body_pr.remove(existing)
+    from pptx.oxml import parse_xml
+
+    norm_autofit = parse_xml(
+        '<a:normAutofit xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>'
+    )
+    body_pr.append(norm_autofit)
+
+
+def _fit_font_size_pt(text: str, base_size_pt: int, box_width_emu: int, box_height_emu: int, bold: bool = False, min_size_pt: int = 12) -> int:
+    """Оценивает, сколько строк займёт `text` при переносе по ширине бокса на
+    кегле `base_size_pt`, и если по высоте не влезает — пропорционально
+    уменьшает кегль (не ниже `min_size_pt`).
+
+    Оценка ширины символа — грубая эвристика (Ariel/Calibri-подобные шрифты:
+    средний символ ~0.52 от кегля в ширину), этого достаточно, чтобы поймать
+    явные переполнения в 2-3 строки, не считая точную метрику каждого глифа.
+    """
+    if not text:
+        return base_size_pt
+
+    EMU_PER_PT = 12700
+    box_width_pt = box_width_emu / EMU_PER_PT
+    box_height_pt = box_height_emu / EMU_PER_PT
+    avg_char_width_factor = 0.56 if bold else 0.52
+    line_height_factor = 1.25
+
+    def lines_needed(size_pt: float) -> int:
+        chars_per_line = max(1, int(box_width_pt / (size_pt * avg_char_width_factor)))
+        total_lines = 0
+        for raw_line in text.split("\n"):
+            raw_line = raw_line or " "
+            words = raw_line.split(" ")
+            cur_len = 0
+            line_count = 1
+            for word in words:
+                w_len = len(word) + 1
+                if cur_len + w_len > chars_per_line and cur_len > 0:
+                    line_count += 1
+                    cur_len = w_len
+                else:
+                    cur_len += w_len
+            total_lines += line_count
+        return total_lines
+
+    size_pt = base_size_pt
+    while size_pt > min_size_pt:
+        n_lines = lines_needed(size_pt)
+        needed_height_pt = n_lines * size_pt * line_height_factor
+        if needed_height_pt <= box_height_pt:
+            break
+        size_pt -= 2
+    return max(size_pt, min_size_pt)
 
 
 def _apply_run_style(paragraph, font_name: str, size_pt: int, bold: bool, color: RGBColor) -> None:

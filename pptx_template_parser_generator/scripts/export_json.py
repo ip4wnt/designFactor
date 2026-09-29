@@ -13,6 +13,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Сохранить описание образцов PPTX в JSON")
     parser.add_argument("source", help="Путь к исходному PPTX")
     parser.add_argument("--output", help="Путь для JSON (по умолчанию в output)")
+    parser.add_argument(
+        "--catalog-only", action="store_true",
+        help="Сохранить только компактный каталог для выбора макета моделью",
+    )
     args = parser.parse_args(argv)
 
     source = Path(args.source)
@@ -22,6 +26,14 @@ def main(argv=None):
               DEFAULT_OUTPUT_DIR / f"{source.stem}_template.json")
     output.parent.mkdir(parents=True, exist_ok=True)
     template = build_template(source)
+    if args.catalog_only:
+        template = {
+            "schema_version": template["schema_version"],
+            "type": "presentation_template_selection_catalog",
+            "slide_size": template["slide_size"],
+            "selection_contract": template["selection_contract"],
+            "variants": template["variant_catalog"],
+        }
     if output.exists():
         parser.error(f"JSON уже существует: {output}")
     save_template_json(template, output)

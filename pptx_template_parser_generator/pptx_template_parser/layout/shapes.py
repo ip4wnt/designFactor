@@ -29,6 +29,33 @@ def placeholder_type(shape):
         return None
 
 
+def placeholder_metadata(shape):
+    """Return stable native PowerPoint metadata for downstream reasoning."""
+    if not shape.is_placeholder:
+        return {
+            "is_placeholder": False,
+            "placeholder_type": None,
+            "placeholder_type_id": None,
+            "placeholder_idx": None,
+        }
+
+    try:
+        kind = shape.placeholder_format.type
+        return {
+            "is_placeholder": True,
+            "placeholder_type": getattr(kind, "name", str(kind).split(" ", 1)[0]),
+            "placeholder_type_id": int(kind),
+            "placeholder_idx": shape.placeholder_format.idx,
+        }
+    except Exception:
+        return {
+            "is_placeholder": True,
+            "placeholder_type": placeholder_type(shape),
+            "placeholder_type_id": None,
+            "placeholder_idx": None,
+        }
+
+
 def get_text(shape):
     if not shape.has_text_frame:
         return ""
@@ -334,8 +361,9 @@ def parse_layout_shapes(layout):
         if shape.is_placeholder and shape.placeholder_format.type == PP_PLACEHOLDER.PICTURE:
             image_placeholders.append({
                 "name": shape.name,
+                "shape_id": shape.shape_id,
                 "shape_index": shape_index,
-                "placeholder_idx": shape.placeholder_format.idx,
+                **placeholder_metadata(shape),
                 **position,
             })
             continue
@@ -350,6 +378,7 @@ def parse_layout_shapes(layout):
 
             image_shapes.append({
                 **metadata,
+                "shape_id": shape.shape_id,
                 "shape_index": shape_index,
 
                 "rId": get_picture_rid(shape),
@@ -377,15 +406,9 @@ def parse_layout_shapes(layout):
 
             text_shapes.append({
                 "name": shape.name,
+                "shape_id": shape.shape_id,
                 "shape_index": shape_index,
-                "placeholder_idx": (
-                    shape.placeholder_format.idx
-                    if shape.is_placeholder else None
-                ),
-
-                "placeholder_type": placeholder_type(
-                    shape
-                ),
+                **placeholder_metadata(shape),
 
                 "text": get_text(shape),
 

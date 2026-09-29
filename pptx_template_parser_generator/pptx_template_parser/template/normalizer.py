@@ -1,5 +1,13 @@
 from collections import Counter
 
+from pptx_template_parser.template.semantics import (
+    build_variant_catalog,
+    enrich_variant,
+    model_contract,
+    schema_contract,
+    selection_contract,
+)
+
 
 def placeholder_to_slot(value):
     if not value:
@@ -7,14 +15,14 @@ def placeholder_to_slot(value):
 
     value = value.lower()
 
-    if "title" in value:
-        return "title"
-
     if "footer" in value:
         return "footer"
 
     if "subtitle" in value:
         return "subtitle"
+
+    if "title" in value:
+        return "title"
 
     if "body" in value:
         return "text"
@@ -75,6 +83,7 @@ def normalize_variant(
 ):
     slots = {}
     text_index = 0
+    from_slides = raw_variant.get("slide_index") is not None
 
     # --------------------------------------------------
     # TEXT
@@ -109,6 +118,11 @@ def normalize_variant(
         slots[slot] = {
             "placeholder_idx": shape.get("placeholder_idx"),
             "shape_index": shape.get("shape_index"),
+            "shape_id": shape.get("shape_id"),
+            "shape_name": shape.get("name"),
+            "is_placeholder": shape.get("is_placeholder", shape.get("placeholder_idx") is not None),
+            "placeholder_type": shape.get("placeholder_type"),
+            "placeholder_type_id": shape.get("placeholder_type_id"),
             "x": shape["x"],
             "y": shape["y"],
             "w": shape["w"],
@@ -123,7 +137,10 @@ def normalize_variant(
             ),
 
             "font": shape.get("font"),
+            "margins": shape.get("margins"),
         }
+        if not from_slides and shape.get("text"):
+            slots[slot]["template_text"] = shape["text"]
 
 
     # --------------------------------------------------
@@ -136,7 +153,6 @@ def normalize_variant(
         slide_height,
     )
 
-    from_slides = raw_variant.get("slide_index") is not None
     source_images = raw_variant.get("image_placeholders_raw", [])
     if from_slides:
         source_images = source_images + [
@@ -147,6 +163,12 @@ def normalize_variant(
         ("image" if index == 1 else f"image_{index}"): {
             "placeholder_idx": shape.get("placeholder_idx"),
             "shape_index": shape.get("shape_index"),
+            "shape_id": shape.get("shape_id"),
+            "shape_name": shape.get("name"),
+            "is_placeholder": shape.get("is_placeholder", shape.get("placeholder_idx") is not None),
+            "placeholder_type": shape.get("placeholder_type"),
+            "placeholder_type_id": shape.get("placeholder_type_id"),
+            "source_kind": "picture_placeholder" if shape.get("placeholder_idx") is not None else "source_picture",
             "x": shape["x"],
             "y": shape["y"],
             "w": shape["w"],
@@ -182,8 +204,9 @@ def normalize_variant(
                      else {name: {key: spec[key] for key in ("x", "y", "w", "h")}
                            for name, spec in image_slots.items()})
 
-    return {
+    variant = {
         "id": raw_variant["name"],
+        "layout_name": raw_variant.get("layout_name", raw_variant["name"]),
         "type": layout_type(text_regions, image_regions),
         "layout_file": raw_variant.get("layout_file"),
         "master_index": raw_variant.get("master_index"),
@@ -199,7 +222,9 @@ def normalize_variant(
             "text_regions_cm": text_regions,
             "image_regions_cm": image_regions,
         },
+        "usage_examples_raw": raw_variant.get("usage_examples_raw", []),
     }
+    return enrich_variant(variant, slide_width, slide_height)
 
 
 def _normalize_vertical_align(value):
@@ -310,6 +335,11 @@ def normalize_template(raw_template):
     ]
 
     return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "schema_id": "pptx-template-semantics-3.0",
+        "schema_file": "schema/template-v3.schema.json",
+        "schema_version": "3.0",
+        "schema": schema_contract(),
         "layout_id": raw_template["layout_id"],
         "type": "presentation_template",
         "source_mode": raw_template.get("source_mode", "layouts"),
@@ -327,6 +357,18 @@ def normalize_template(raw_template):
         ),
 
         "variants": variants,
+
+        "selection_contract": selection_contract(),
+        "variant_catalog": build_variant_catalog(variants),
+
+        "model_contract": model_contract(),
+
+        "generation_contract": {
+            "purpose": "Выбрать variant и заполнить только объявленные редактируемые слоты.",
+            "canonical_variant_contract": "variants[].generation_contract",
+            "payload_format": model_contract()["generator_payload"]["format"],
+            "validation": model_contract()["generator_payload"]["validation"],
+        },
 
         "allowed_content": raw_template.get(
             "allowed_content",
@@ -365,12 +407,17 @@ def normalize_images(
 
         normalized = {
             "name": image.get("name"),
+            "description": image.get("description"),
+            "title": image.get("title"),
             "rId": image.get("rId"),
             "target": target,
             "x": image["x"],
             "y": image["y"],
             "w": image["w"],
             "h": image["h"],
+            "editable": False,
+            "decorative": True,
+            "semantic_role": "decorative_image",
         }
         if image.get("shape_index") is not None:
             normalized["shape_index"] = image["shape_index"]
@@ -387,6 +434,7 @@ def normalize_images(
                 slide_height,
             )
         ):
+            normalized["semantic_role"] = "background"
             background = normalized
             continue
 
@@ -434,4 +482,3 @@ def _normalize_horizontal_align(value):
         return "left"
 
     return value
-

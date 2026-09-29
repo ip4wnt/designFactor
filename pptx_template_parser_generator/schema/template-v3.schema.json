@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pptx-template-semantics-3.0",
+  "title": "PPTX template semantic model v3",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "schema_id",
+    "type",
+    "slide_size",
+    "variants",
+    "selection_contract",
+    "variant_catalog",
+    "generation_contract"
+  ],
+  "properties": {
+    "schema_version": {"const": "3.0"},
+    "schema_id": {"const": "pptx-template-semantics-3.0"},
+    "type": {"const": "presentation_template"},
+    "slide_size": {
+      "type": "object",
+      "required": ["width", "height", "unit"],
+      "properties": {
+        "width": {"type": "number", "exclusiveMinimum": 0},
+        "height": {"type": "number", "exclusiveMinimum": 0},
+        "unit": {"const": "cm"}
+      }
+    },
+    "variants": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/variant"}
+    },
+    "selection_contract": {"type": "object"},
+    "variant_catalog": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/catalogEntry"}
+    },
+    "generation_contract": {"type": "object"},
+    "model_contract": {"type": "object"}
+  },
+  "$defs": {
+    "catalogEntry": {
+      "type": "object",
+      "required": [
+        "id",
+        "family",
+        "semantic_scope",
+        "narrative_role",
+        "content_pattern",
+        "composition",
+        "text_slots",
+        "image_slots",
+        "review_required",
+        "decision_owner"
+      ]
+    },
+    "variant": {
+      "type": "object",
+      "required": [
+        "id",
+        "slots",
+        "image_slots",
+        "observed",
+        "inferred",
+        "generation_contract"
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "observed": {"$ref": "#/$defs/observed"},
+        "inferred": {"$ref": "#/$defs/inferred"},
+        "generation_contract": {"$ref": "#/$defs/variantGenerationContract"}
+      }
+    },
+    "observedSlot": {
+      "type": "object",
+      "required": ["object_kind", "x", "y", "w", "h"],
+      "properties": {
+        "object_kind": {"enum": ["text", "image"]},
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "w": {"type": "number", "minimum": 0},
+        "h": {"type": "number", "minimum": 0}
+      },
+      "not": {
+        "anyOf": [
+          {"required": ["semantic_role"]},
+          {"required": ["role_confidence"]},
+          {"required": ["editable"]},
+          {"required": ["required"]},
+          {"required": ["instructions"]}
+        ]
+      }
+    },
+    "observed": {
+      "type": "object",
+      "required": [
+        "source",
+        "geometry",
+        "text_slots",
+        "image_slots",
+        "fixed_artwork",
+        "usage_examples"
+      ],
+      "properties": {
+        "text_slots": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/observedSlot"}
+        },
+        "image_slots": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/observedSlot"}
+        },
+        "usage_examples": {"type": "array"}
+      }
+    },
+    "roleInference": {
+      "type": "object",
+      "required": ["primary", "confidence", "alternatives", "evidence"],
+      "properties": {
+        "primary": {"type": "string", "minLength": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "alternatives": {"type": "array"},
+        "evidence": {"type": "array"}
+      }
+    },
+    "inferredSlot": {
+      "type": "object",
+      "required": [
+        "role",
+        "content_kind",
+        "semantic_scope",
+        "allowed_content_kinds",
+        "usage_evidence",
+        "editable",
+        "decorative"
+      ],
+      "properties": {
+        "role": {"$ref": "#/$defs/roleInference"},
+        "semantic_scope": {
+          "enum": ["specific", "flexible", "unknown", "decorative"]
+        },
+        "allowed_content_kinds": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "usage_evidence": {"type": "object"},
+        "editable": {"type": "boolean"},
+        "decorative": {"type": "boolean"}
+      }
+    },
+    "inferred": {
+      "type": "object",
+      "required": [
+        "layout",
+        "text_slots",
+        "image_slots",
+        "reading_order",
+        "relations",
+        "composition",
+        "usage_summary",
+        "flexible_slots",
+        "downstream_choice",
+        "ambiguities",
+        "review"
+      ],
+      "properties": {
+        "text_slots": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/inferredSlot"}
+        },
+        "image_slots": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/inferredSlot"}
+        },
+        "composition": {
+          "type": "object",
+          "required": ["primary", "confidence", "alternatives", "groups", "evidence"]
+        },
+        "usage_summary": {"type": "object"}
+      }
+    },
+    "contractSlot": {
+      "type": "object",
+      "required": [
+        "slot",
+        "generator_field",
+        "accepted_value",
+        "purpose",
+        "content_kind",
+        "required",
+        "role",
+        "role_confidence",
+        "semantic_scope",
+        "allowed_content_kinds",
+        "constraints"
+      ],
+      "properties": {
+        "slot": {"type": "string", "minLength": 1},
+        "generator_field": {"enum": ["content", "image_content"]},
+        "required": {"type": "boolean"},
+        "role_confidence": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "variantGenerationContract": {
+      "type": "object",
+      "required": [
+        "variant",
+        "payload",
+        "text_slots",
+        "image_slots",
+        "required_slots",
+        "optional_slots",
+        "selection",
+        "content_budget",
+        "overflow_policy"
+      ],
+      "properties": {
+        "variant": {"type": "string", "minLength": 1},
+        "text_slots": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/contractSlot"}
+        },
+        "image_slots": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/contractSlot"}
+        },
+        "required_slots": {"type": "array", "items": {"type": "string"}},
+        "optional_slots": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

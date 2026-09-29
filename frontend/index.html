@@ -2,497 +2,2372 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<title>Тест-фронт: генератор презентаций</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI-дизайнер презентаций</title>
+<style>
+:root{
+  --bg-0:#040C1C;
+  --bg-1:#071630;
+  --surface:rgba(9,26,52,0.62);
+  --surface-2:rgba(14,38,72,0.72);
+  --surface-3:rgba(20,52,92,0.85);
+  --border:rgba(140,200,230,0.12);
+  --border-strong:rgba(140,200,230,0.26);
+  --text-0:#EAF4FB;
+  --text-1:#C2D6E6;
+  --text-2:#7F9BB4;
+  --accent:#2EE6D6;
+  --accent-strong:#14C7B8;
+  --accent-soft:rgba(46,230,214,0.14);
+  --accent-ink:#03121A;
+  --danger:#FF7A7A;
+  --warn:#FFC466;
+  --ok:#5EE3A6;
+  --radius:16px;
+  --radius-sm:10px;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --shadow-lg: 0 24px 64px -24px rgba(0,0,0,0.6);
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:var(--font-sans);
+  background:var(--bg-0);
+  color:var(--text-0);
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:inherit;}
+button{font-family:inherit;}
+::selection{background:var(--accent-soft);}
+
+/* ---------- Layout shells ---------- */
+.app{min-height:100vh;display:flex;flex-direction:column;}
+.topbar{
+  position:fixed;top:0;left:0;right:0;z-index:50;height:58px;
+  display:flex;align-items:center;justify-content:center;
+  padding:0 32px;
+}
+.topbar.solid{background:rgba(4,12,28,0.55);backdrop-filter:blur(16px);border-bottom:1px solid var(--border);}
+.wordmark{font-size:15px;font-weight:700;letter-spacing:-.01em;color:#fff;display:none;align-items:center;gap:5px;text-decoration:none;cursor:pointer;transition:opacity .15s;}
+.wordmark:hover{opacity:.8;}
+.topbar.solid .wordmark{display:flex;}
+.grad{background:linear-gradient(90deg,#8FF3EA 0%,var(--accent) 45%,#5AB8FF 100%);-webkit-background-clip:text;background-clip:text;color:transparent;}
+
+/* ---------- Landing ---------- */
+.landing{
+  position:relative;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;
+  padding:150px 24px 80px;
+}
+/* Анимированный фон Ocean Aura (ocean-aura.js): на главной — палитра «abyss-deep»,
+   на внутренних экранах — ещё темнее (deep-night) и с затемняющей вуалью. */
+#stage{position:fixed;inset:0;z-index:0;pointer-events:none;}
+#stage::after{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 30%,rgba(4,12,28,0) 0%,rgba(4,12,28,.5) 75%,rgba(4,12,28,.85) 100%);transition:background .8s;}
+body.inner #stage::after{background:rgba(4,12,28,.9);}
+.app{position:relative;z-index:1;}
+.landing-inner{position:relative;z-index:2;width:100%;max-width:900px;display:flex;flex-direction:column;align-items:center;text-align:center;}
+.landing h1{
+  font-size:clamp(36px,5vw,56px);font-weight:700;letter-spacing:-0.02em;line-height:1.08;
+  margin:0 0 18px;color:var(--text-0);
+}
+/* Статичный фон под canvas: без WebGL, при prefers-reduced-motion и на слабых машинах */
+#stage{background:radial-gradient(ellipse at 30% 20%,#0B2A4A 0%,#071630 45%,#040C1C 100%);}
+@media (prefers-reduced-motion: reduce){ #stage::after{transition:none;} }
+.landing .hero-sub{
+  font-size:clamp(16px,1.4vw,19px);line-height:1.45;color:var(--text-1);max-width:640px;
+  margin:0 0 34px;
+}
+.landing .hero-sub b{color:var(--text-0);font-weight:600;}
+.prompt-shell{
+  width:100%;max-width:720px;background:rgba(255,255,255,0.06);
+  border:1px solid rgba(255,255,255,0.14);border-radius:20px;
+  backdrop-filter:blur(20px);padding:8px 8px 8px 20px;
+  display:flex;align-items:flex-end;gap:12px;
+  box-shadow:var(--shadow-lg);
+  transition:border-color .2s ease;
+}
+.prompt-shell:focus-within{border-color:var(--accent);}
+.prompt-icon-btn{
+  width:38px;height:38px;border-radius:12px;border:1px solid var(--border-strong);
+  background:rgba(255,255,255,0.05);color:var(--text-1);display:flex;align-items:center;justify-content:center;
+  cursor:pointer;flex:none;transition:all .2s ease;margin-bottom:6px;
+}
+.prompt-icon-btn:hover{background:rgba(255,255,255,0.1);color:var(--text-0);}
+#promptInput{
+  flex:1;background:transparent;border:none;outline:none;color:var(--text-0);
+  font-size:16px;line-height:1.5;padding:12px 0;resize:none;max-height:180px;font-family:inherit;
+}
+#promptInput::placeholder{color:var(--text-2);}
+.send-btn{
+  width:44px;height:44px;border-radius:14px;border:none;
+  background:var(--accent-strong);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-weight:700;
+  cursor:pointer;flex:none;margin-bottom:6px;transition:all .2s ease;
+}
+.send-btn:hover{background:var(--accent);transform:translateY(-1px);}
+.send-btn:disabled{background:var(--surface-3);color:var(--text-2);cursor:not-allowed;transform:none;}
+
+.attach-row{width:100%;max-width:720px;display:flex;align-items:center;gap:10px;margin-top:10px;min-height:26px;}
+.attach-chip{
+  display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.07);border:1px solid var(--border-strong);
+  border-radius:999px;padding:5px 12px 5px 10px;font-size:13px;color:var(--text-1);
+}
+.attach-chip button{background:none;border:none;color:var(--text-2);cursor:pointer;font-size:15px;line-height:1;padding:0;}
+.attach-chip button:hover{color:var(--danger);}
+
+/* Панель параметров под строкой запроса (отступ = половина отступа до заголовка) */
+.params{
+  width:100%;max-width:720px;margin-top:40px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:18px 20px 18px;text-align:left;backdrop-filter:blur(20px);display:flex;flex-direction:column;gap:16px;
+}
+.row3{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:14px;}
+.field{display:flex;flex-direction:column;gap:7px;min-width:0;}
+.field>label{font-size:11px;color:var(--text-2);text-transform:uppercase;letter-spacing:.07em;font-weight:600;display:flex;justify-content:space-between;align-items:baseline;}
+.field>label .val{text-transform:none;letter-spacing:0;font-size:12px;color:var(--accent);font-weight:600;}
+.selwrap{position:relative;}
+.selwrap select{
+  width:100%;appearance:none;-webkit-appearance:none;background:rgba(255,255,255,.04);border:1px solid var(--border-strong);border-radius:10px;
+  color:var(--text-0);font:inherit;font-size:13.5px;padding:9px 34px 9px 12px;outline:none;cursor:pointer;transition:border-color .15s;
+  text-overflow:ellipsis;white-space:nowrap;overflow:hidden;
+}
+.selwrap select:hover{border-color:rgba(46,230,214,.5);}
+.selwrap select:focus{border-color:var(--accent);}
+.selwrap select option{background:#0A1F3A;color:var(--text-0);}
+.selwrap::after{content:'';position:absolute;right:13px;top:50%;width:7px;height:7px;border-right:1.5px solid var(--text-2);border-bottom:1.5px solid var(--text-2);transform:translateY(-70%) rotate(45deg);pointer-events:none;}
+.selwrap select.set{border-color:rgba(46,230,214,.45);background:var(--accent-soft);}
+.opt-input{display:none;background:rgba(255,255,255,.04);border:1px solid var(--accent);border-radius:10px;color:var(--text-0);font:inherit;font-size:13.5px;padding:9px 12px;outline:none;}
+.opt-input.show{display:block;}
+.slides-row{display:flex;align-items:center;gap:14px;}
+.num{width:58px;background:rgba(255,255,255,.04);border:1px solid var(--border-strong);border-radius:10px;color:var(--text-0);font:inherit;font-size:15px;font-weight:600;padding:7px 8px;text-align:center;outline:none;-moz-appearance:textfield;}
+.num::-webkit-outer-spin-button,.num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+.num:focus{border-color:var(--accent);}
+.range{position:relative;flex:1;height:34px;}
+.range input[type=range]{position:absolute;left:0;right:0;top:0;width:100%;height:34px;margin:0;-webkit-appearance:none;appearance:none;background:none;pointer-events:none;}
+.range input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;pointer-events:auto;width:18px;height:18px;border-radius:50%;background:#fff;border:3px solid var(--accent);box-shadow:0 0 0 4px rgba(46,230,214,.18);cursor:grab;}
+.range input[type=range]::-moz-range-thumb{pointer-events:auto;width:12px;height:12px;border-radius:50%;background:#fff;border:3px solid var(--accent);cursor:grab;}
+.range .track{position:absolute;left:0;right:0;top:15px;height:4px;border-radius:2px;background:rgba(255,255,255,.10);}
+.range .fill{position:absolute;top:15px;height:4px;border-radius:2px;background:linear-gradient(90deg,var(--accent-strong),var(--accent));min-width:4px;}
+.range .ticks{position:absolute;left:0;right:0;top:26px;display:flex;justify-content:space-between;font-size:10px;color:var(--text-2);padding:0 6px;}
+.preset-note{border-top:1px dashed var(--border-strong);padding-top:14px;display:grid;grid-template-columns:130px 1fr;gap:16px;}
+.preset-note[hidden]{display:none;}
+.preset-note>label{font-size:11px;color:var(--text-2);text-transform:uppercase;letter-spacing:.07em;font-weight:600;padding-top:2px;}
+.preset-note .txt{font-size:13px;line-height:1.55;color:var(--text-1);}
+.preset-note .txt b{color:var(--accent);font-weight:600;}
+.preset-note .edit{margin-top:8px;font-size:12px;color:var(--text-2);}
+.preset-note .edit a{color:var(--accent);text-decoration:none;cursor:pointer;}
+
+/* ---------- Case manager modal ---------- */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(6,5,10,0.7);backdrop-filter:blur(6px);
+  display:flex;align-items:center;justify-content:center;z-index:200;padding:24px;
+}
+.modal{
+  width:100%;max-width:640px;max-height:86vh;overflow-y:auto;background:var(--surface);
+  border:1px solid var(--border-strong);border-radius:var(--radius);padding:28px;
+  box-shadow:var(--shadow-lg);
+}
+.modal h2{margin:0 0 6px;font-size:20px;}
+.modal p.sub{margin:0 0 22px;color:var(--text-2);font-size:14px;}
+.case-edit-row{
+  border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;margin-bottom:12px;background:var(--surface-2);
+}
+.case-edit-row label{display:block;font-size:12px;color:var(--text-2);margin:10px 0 4px;text-transform:uppercase;letter-spacing:.04em;}
+.case-edit-row label:first-child{margin-top:0;}
+.case-edit-row input[type=text], .case-edit-row textarea, .case-edit-row input[type=number]{
+  width:100%;background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;
+  color:var(--text-0);padding:9px 12px;font-size:14px;font-family:inherit;outline:none;
+}
+.case-edit-row textarea{resize:vertical;min-height:64px;}
+.case-edit-row input:focus, .case-edit-row textarea:focus{border-color:var(--accent);}
+.case-edit-row .row-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;}
+.btn{
+  padding:9px 18px;border-radius:10px;border:1px solid var(--border-strong);background:var(--surface-3);
+  color:var(--text-0);cursor:pointer;font-size:14px;transition:all .15s ease;
+}
+.btn:hover{border-color:var(--accent);}
+.btn.primary{background:var(--accent-strong);border-color:var(--accent-strong);color:var(--accent-ink);font-weight:600;}
+.btn.primary:hover{background:var(--accent);}
+.btn.ghost{background:transparent;}
+.btn.danger-ghost{background:transparent;color:var(--danger);border-color:transparent;}
+.btn.danger-ghost:hover{background:rgba(255,122,122,0.1);border-color:var(--danger);}
+.btn:disabled{opacity:.5;cursor:not-allowed;}
+.modal-footer{display:flex;justify-content:space-between;align-items:center;margin-top:18px;}
+
+/* ---------- Checklist screen ---------- */
+.screen{display:none;min-height:100vh;padding:110px 24px 60px;}
+.screen.visible{display:block;}
+.screen-inner{max-width:760px;margin:0 auto;}
+.screen h2{font-size:26px;margin:0 0 8px;letter-spacing:-0.01em;}
+.screen p.lead{color:var(--text-2);margin:0 0 32px;font-size:15px;}
+.checklist{display:flex;flex-direction:column;gap:18px;}
+.check-item{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:18px 20px;}
+.check-item label{display:block;font-size:14px;font-weight:600;margin-bottom:10px;color:var(--text-0);}
+.check-item .opts{display:flex;flex-wrap:wrap;gap:8px;}
+.opt-chip{
+  padding:8px 16px;border-radius:999px;border:1px solid var(--border-strong);background:var(--surface-2);
+  color:var(--text-1);font-size:13px;cursor:pointer;transition:all .15s ease;
+}
+.opt-chip:hover{border-color:var(--accent);}
+.opt-chip.selected{background:var(--accent-soft);border-color:var(--accent);color:var(--text-0);}
+.check-item input[type=text]{
+  width:100%;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:8px;
+  color:var(--text-0);padding:10px 14px;font-size:14px;font-family:inherit;outline:none;
+}
+.check-item input[type=text]:focus{border-color:var(--accent);}
+.checklist-footer{display:flex;justify-content:flex-end;gap:12px;margin-top:32px;}
+
+/* ---------- Pipeline screen ---------- */
+/* Сервис верстается только под десктоп: основная колонка центрируется в окне
+   (как на главной), боковая панель дизайн-системы прижата к правому краю. */
+.pipeline-screen{display:none;min-height:100vh;}
+.pipeline-screen.visible{display:flex;justify-content:center;}
+.pipeline-main{flex:1 1 auto;width:100%;max-width:1240px;margin:0 auto;padding:100px 40px 60px;min-width:0;}
+.pipeline-main > .progress-bar-wrap,.pipeline-main > .timeline,.pipeline-main > .back-link{max-width:820px;margin-left:auto;margin-right:auto;}
+.pipeline-main > .back-link-row{max-width:820px;margin:0 auto;}
+.pipeline-main > .progress-bar-wrap{margin-bottom:44px;}
+/* Панель дизайн-системы — на всю ширину экрана поверх пайплайна (Esc / ✕ — закрыть) */
+.pipeline-side{
+  position:fixed;left:0;right:0;top:58px;bottom:0;z-index:40;
+  background:rgba(4,12,28,0.94);backdrop-filter:blur(24px);
+  padding:28px 0 40px;display:none;flex-direction:column;overflow-y:auto;
+}
+.pipeline-side.open{display:flex;}
+.pipeline-side .ds-panel-header{max-width:1400px;width:100%;margin:0 auto 20px;padding:0 40px 20px;}
+.pipeline-side .ds-panel-body{max-width:1400px;width:100%;margin:0 auto;padding:0 40px;}
+.pipeline-side .ds-section{margin-bottom:36px;padding-bottom:28px;border-bottom:1px solid var(--border);}
+.pipeline-side .ds-section:last-of-type{border-bottom:none;}
+.pipeline-side .ds-layouts-grid{grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;}
+.progress-bar-wrap{margin-bottom:44px;}
+.progress-bar-track{height:6px;border-radius:999px;background:var(--surface-2);overflow:hidden;}
+.progress-bar-fill{height:100%;background:linear-gradient(90deg, var(--accent-strong), var(--accent));border-radius:999px;transition:width .5s cubic-bezier(.2,.8,.2,1);}
+.progress-bar-label{display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:var(--text-2);}
+.progress-bar-label b{color:var(--text-0);font-weight:600;}
+
+.timeline{position:relative;padding-left:36px;}
+.timeline::before{content:'';position:absolute;left:11px;top:6px;bottom:6px;width:2px;background:var(--border);}
+.tl-item{position:relative;padding-bottom:34px;}
+.tl-item:last-child{padding-bottom:0;}
+.tl-dot{
+  position:absolute;left:-36px;top:0;width:24px;height:24px;border-radius:50%;
+  background:var(--surface-2);border:2px solid var(--border-strong);
+  display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text-2);
+  transition:all .3s ease;
+}
+.tl-item.done .tl-dot{background:var(--ok);border-color:var(--ok);color:#0a1f0f;}
+.tl-item.active .tl-dot{background:var(--accent-strong);border-color:var(--accent);color:var(--accent-ink);box-shadow:0 0 0 4px var(--accent-soft);}
+.tl-item.failed .tl-dot{background:var(--danger);border-color:var(--danger);color:#fff;}
+.tl-title{font-size:15px;font-weight:600;color:var(--text-2);transition:color .3s ease;}
+.tl-item.done .tl-title, .tl-item.active .tl-title{color:var(--text-0);}
+.tl-item.failed .tl-title{color:var(--danger);}
+.tl-desc{font-size:13px;color:var(--text-2);margin-top:4px;line-height:1.5;}
+.tl-panel-trigger{
+  margin-top:10px;display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--accent);
+  cursor:pointer;padding:6px 12px;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);
+}
+.tl-panel-trigger:hover{background:rgba(46,230,214,0.24);}
+.spinner{
+  width:12px;height:12px;border-radius:50%;border:2px solid rgba(3,18,26,0.3);border-top-color:var(--accent-ink);
+  animation:spin .7s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* ---------- Design system side panel ---------- */
+.ds-panel-header{padding:0 28px 20px;border-bottom:1px solid var(--border);margin-bottom:20px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}
+.ds-panel-header h3{margin:0 0 4px;font-size:16px;}
+.ds-panel-header p{margin:0;font-size:12px;color:var(--text-2);}
+.ds-panel-close{
+  flex:none;width:32px;height:32px;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);
+  color:var(--text-1);font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:all .15s ease;
+}
+.ds-panel-close:hover{background:var(--surface-2);color:var(--text-0);border-color:var(--danger);}
+.ds-panel-body{padding:0 28px;flex:1;overflow-y:auto;}
+.ds-section{margin-bottom:26px;}
+.ds-section-title{
+  display:flex;align-items:center;justify-content:space-between;font-size:13px;font-weight:600;
+  color:var(--text-1);text-transform:uppercase;letter-spacing:.04em;margin-bottom:12px;
+}
+.ds-edit-hint{
+  width:32px;height:32px;border-radius:8px;border:1px dashed var(--border-strong);color:var(--text-2);
+  display:flex;align-items:center;justify-content:center;font-size:16px;cursor:not-allowed;opacity:.6;flex:none;
+}
+.ds-add-btn{
+  width:26px;height:26px;border-radius:7px;border:1px dashed var(--border-strong);color:var(--text-2);
+  display:flex;align-items:center;justify-content:center;font-size:15px;cursor:not-allowed;opacity:.6;flex:none;
+  background:var(--surface-2);
+}
+.ds-swatches{display:flex;flex-wrap:wrap;gap:8px;}
+.ds-swatch{width:34px;height:34px;border-radius:8px;border:1px solid var(--border-strong);position:relative;cursor:default;}
+.ds-swatch:hover::after{
+  content:attr(data-label);position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);
+  background:var(--surface-3);color:var(--text-0);padding:6px 10px;border-radius:6px;font-size:11px;
+  white-space:nowrap;box-shadow:var(--shadow-lg);z-index:5;
+}
+.ds-font-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;}
+.ds-font-row:last-child{border-bottom:none;}
+.ds-font-row .role{color:var(--text-2);}
+.ds-font-row .val{color:var(--text-0);font-weight:500;}
+.ds-layouts-grid{display:grid;grid-template-columns:repeat(2, 1fr);gap:10px;}
+.ds-type-table{width:100%;border-collapse:collapse;font-size:12px;}
+.ds-type-table th{text-align:left;font-weight:500;color:var(--text-2);padding:4px 6px 6px 0;border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.04em;}
+.ds-type-table td{padding:7px 6px 7px 0;border-bottom:1px solid var(--border);vertical-align:top;color:var(--text-1);}
+.ds-type-table tr:last-child td{border-bottom:none;}
+.ds-type-table .role{color:var(--text-0);font-weight:500;}
+.ds-type-table .fam{color:var(--text-2);font-size:11px;margin-top:2px;}
+.ds-type-table .sz{white-space:nowrap;color:var(--text-0);}
+.ds-type-table .est{color:var(--text-2);font-size:10px;}
+.ds-type-table .n{text-align:right;color:var(--text-2);}
+.ds-type-sample{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;margin:2px 0 14px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);overflow:hidden;}
+.ds-type-sample span{color:var(--text-0);line-height:1;white-space:nowrap;}
+.ds-color-dots{display:inline-flex;gap:3px;vertical-align:middle;margin-left:4px;}
+.ds-color-dots i{width:9px;height:9px;border-radius:50%;border:1px solid var(--border-strong);display:inline-block;}
+.ds-layout-group{font-size:11px;color:var(--text-2);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 8px;}
+.ds-layout-group:first-child{margin-top:0;}
+.ds-layout-mock .mock-el.is-image{background:repeating-linear-gradient(135deg, rgba(139,92,246,.35) 0 3px, rgba(139,92,246,.12) 3px 6px);opacity:1;}
+.ds-layout-mock .mock-el.is-decor{opacity:.35;}
+.ds-layout-meta{font-size:10px;color:var(--text-2);margin-top:3px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ds-layout-card{
+  border:1px solid var(--border);border-radius:8px;background:var(--surface-2);padding:8px;position:relative;
+}
+.ds-layout-mock{
+  aspect-ratio:16/9;background:var(--surface);border:1px solid var(--border);border-radius:5px;position:relative;overflow:hidden;
+}
+.ds-layout-mock .mock-el{position:absolute;border-radius:2px;background:var(--border-strong);opacity:.75;}
+.ds-layout-mock .mock-el.is-title{background:var(--accent);opacity:.85;}
+.ds-layout-name{font-size:11px;color:var(--text-2);margin-top:6px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ds-layout-chip{
+  display:inline-block;padding:5px 10px;border-radius:8px;background:var(--surface-2);border:1px solid var(--border);
+  font-size:12px;color:var(--text-1);margin:0 6px 6px 0;
+}
+.ds-json-toggle{
+  font-size:12px;color:var(--accent);cursor:pointer;margin-top:6px;display:inline-block;
+}
+.ds-json-block{
+  background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;
+  font-family:'SF Mono',Consolas,monospace;font-size:11px;color:var(--text-1);white-space:pre-wrap;
+  max-height:280px;overflow-y:auto;margin-top:8px;display:none;
+}
+.ds-json-block.open{display:block;}
+
+#stageContent{max-width:820px;margin:0 auto;}
+#stageContent.wide{max-width:none;}
+.pipeline-main.wide{max-width:1480px;}
+/* ---------- План содержания (панель) ---------- */
+.plan-meta{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:22px;}
+.plan-meta .box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px 16px;}
+.plan-meta .box .k{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-2);margin-bottom:6px;}
+.plan-meta .box .v{font-size:14px;line-height:1.5;color:var(--text-0);}
+.plan-list{display:flex;flex-direction:column;gap:10px;}
+.plan-row{display:grid;grid-template-columns:40px 1fr;gap:14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px 16px;}
+.plan-row .pn{font-size:22px;font-weight:700;color:var(--accent);line-height:1;padding-top:2px;}
+.plan-row .ttl{font-size:15px;font-weight:600;color:var(--text-0);line-height:1.35;}
+.plan-row .purpose{display:block;font-size:12px;color:var(--text-2);margin-top:3px;line-height:1.4;font-weight:400;}
+.plan-row ul{margin:8px 0 0;padding-left:18px;font-size:13px;color:var(--text-1);line-height:1.5;}
+.plan-row .txt{margin:8px 0 0;font-size:13px;color:var(--text-1);line-height:1.5;}
+.plan-row .more{font-size:12px;color:var(--text-2);margin-top:4px;}
+.plan-row .data{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.plan-row .data span{font-size:12px;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:3px 9px;}
+.plan-row .kinds{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);}
+.plan-row .kinds span{font-size:11px;color:var(--text-1);border:1px solid var(--border-strong);border-radius:6px;padding:2px 7px;}
+.plan-row .kinds span b{color:var(--accent);font-weight:700;margin-right:4px;}
+.plan-row .kinds span.same{opacity:.55;}
+.plan-empty{color:var(--text-2);font-size:13px;}
+/* ---------- Выбор варианта: сравнение слайд за слайдом ---------- */
+.variant-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:6px;}
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:10px;overflow:hidden;}
+.seg button{background:transparent;border:0;color:var(--text-2);font:inherit;font-size:12px;font-weight:600;padding:7px 12px;cursor:pointer;}
+.seg button.on{background:var(--accent-soft);color:var(--accent);}
+.variant-info .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+.variant-info .chips span{font-size:11px;color:var(--text-1);background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:2px 7px;}
+.variant-info .chips span.diff{color:var(--accent);border-color:rgba(46,230,214,.4);}
+.compare{display:none;}
+.compare.on{display:block;}
+.compare-nav{display:flex;align-items:center;justify-content:center;gap:14px;margin:10px 0 14px;font-size:13px;color:var(--text-1);}
+.compare-nav button{background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text-0);border-radius:8px;padding:6px 12px;cursor:pointer;font:inherit;}
+.compare-nav button:disabled{opacity:.35;cursor:default;}
+.compare-nav .strip{display:flex;gap:4px;}
+.compare-nav .strip i{width:8px;height:8px;border-radius:50%;background:var(--border-strong);cursor:pointer;display:block;}
+.compare-nav .strip i.on{background:var(--accent);}
+.compare-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;align-items:start;}
+.compare-card{border:2px solid var(--border);border-radius:var(--radius);background:var(--surface);overflow:hidden;cursor:pointer;transition:border-color .2s;}
+.compare-card:hover{border-color:var(--border-strong);}
+.compare-card.selected{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+.compare-card.missing{opacity:.6;cursor:default;}
+.compare-card .variant-thumb-placeholder{color:var(--text-2);font-size:13px;}
+.compare-card .cap{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;font-size:13px;border-bottom:1px solid var(--border);}
+.compare-card .cap b{font-weight:600;}
+.compare-card .cap span{font-size:11px;color:var(--text-2);}
+.compare-card img{width:100%;aspect-ratio:16/9;object-fit:contain;display:block;background:var(--surface-2);}
+.compare-card .kind{padding:8px 14px 10px;font-size:12px;color:var(--text-1);}
+/* ---------- Доработка слайдов ---------- */
+.refine-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:14px;}
+.refine-card{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);overflow:hidden;}
+.refine-card .head{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;font-size:12px;border-bottom:1px solid var(--border);}
+.refine-card .head b{font-weight:600;font-size:13px;}
+.refine-card .head span{color:var(--text-2);}
+.refine-card .shot{position:relative;background:#fff;aspect-ratio:16/9;}
+.refine-card .shot img{width:100%;height:100%;object-fit:contain;display:block;}
+.refine-card .shot.busy::after{content:attr(data-busy);position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(4,12,28,.66);color:#fff;font-size:13px;font-weight:600;text-align:center;padding:12px;}
+.refine-card .acts{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;}
+.refine-card .acts button{background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text-0);border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer;}
+.refine-card .acts button:hover{border-color:var(--accent);color:var(--accent);}
+.refine-card .acts button:disabled{opacity:.4;cursor:default;}
+.audit-stale{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:rgba(255,196,102,.1);border:1px solid rgba(255,196,102,.45);border-radius:var(--radius-sm);padding:10px 14px;font-size:13px;color:var(--warn);margin:10px 0 14px;}
+/* ---------- Дизайн-система: источник дизайна ---------- */
+.ds-source{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 14px;}
+.ds-source .stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;min-width:120px;}
+.ds-source .stat .n{font-size:22px;font-weight:700;color:var(--text-0);line-height:1.1;}
+.ds-source .stat .l{font-size:11px;color:var(--text-2);margin-top:4px;}
+.ds-source .stat.main .n{font-size:15px;color:var(--accent);}
+.ds-comp-group{margin-top:10px;}
+.ds-comp-group .g{font-size:12px;color:var(--text-2);margin-bottom:6px;}
+.ds-comp-group .chips{display:flex;gap:6px;flex-wrap:wrap;}
+.ds-comp-group .chips span{font-size:12px;color:var(--text-1);border:1px solid var(--border-strong);border-radius:6px;padding:3px 9px;}
+.ds-comp-group .chips span b{color:var(--accent);margin-left:5px;}
+
+/* ---------- Variant grid ---------- */
+.variant-section{margin-top:40px;}
+/* Три колонки (по варианту), каждая — вертикальный стек слайдов. Сетка на всю
+   ширину колонки без горизонтальной прокрутки: десктоп-only, места хватает. */
+.variant-carousel{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;padding:8px 0 20px;align-items:start;overflow:visible;}
+.variant-card{
+  min-width:0;background:var(--surface);border:2px solid var(--border);
+  border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:border-color .2s ease, box-shadow .2s ease;
+}
+.variant-card:hover{border-color:var(--border-strong);}
+.variant-card.selected{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+.variant-info{
+  padding:12px 16px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;position:sticky;top:0;
+  background:var(--surface);border-bottom:1px solid var(--border);z-index:2;
+}
+.variant-info .name{font-size:14px;font-weight:600;}
+.variant-info .axis{font-size:12px;color:var(--text-2);margin-top:4px;line-height:1.4;}
+.variant-info .layouts{font-size:11px;color:var(--text-2);margin-top:6px;opacity:.8;}
+.variant-check{
+  width:22px;height:22px;border-radius:50%;border:2px solid var(--border-strong);display:flex;align-items:center;
+  justify-content:center;font-size:12px;color:transparent;transition:all .2s ease;flex:none;
+}
+.variant-card.selected .variant-check{background:var(--accent-strong);border-color:var(--accent-strong);color:var(--accent-ink);}
+.variant-slides{max-height:640px;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px;}
+.variant-slide-thumb{
+  width:100%;aspect-ratio:16/9;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;
+  object-fit:contain;display:block;
+}
+.variant-slide-num{font-size:11px;color:var(--text-2);margin:-2px 0 0;}
+.variant-thumb-placeholder{
+  aspect-ratio:16/9;background:linear-gradient(135deg,var(--surface-2),var(--surface-3));border-radius:6px;
+  display:flex;align-items:center;justify-content:center;color:var(--text-2);font-size:12px;
+}
+.variant-thumb-placeholder.error{color:var(--danger);}
+.variant-download{
+  display:block;text-align:center;font-size:12px;color:var(--accent);padding:10px 16px 14px;text-decoration:none;
+  border-top:1px solid var(--border);
+}
+
+/* ---------- Audit choice ---------- */
+.audit-choice-cards{display:flex;gap:16px;margin-top:20px;flex-wrap:wrap;}
+.audit-choice-card{
+  flex:1;min-width:220px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:22px;cursor:pointer;transition:all .2s ease;
+}
+.audit-choice-card:hover{border-color:var(--accent);transform:translateY(-2px);}
+.audit-choice-card h4{margin:0 0 8px;font-size:16px;}
+.audit-choice-card p{margin:0;font-size:13px;color:var(--text-2);line-height:1.5;}
+.audit-choice-card .icon{font-size:22px;margin-bottom:10px;}
+.audit-choice-card.running{pointer-events:none;border-color:var(--border);background:var(--surface-2);opacity:.85;transform:none;}
+.audit-choice-card.running h4{color:var(--text-1);}
+.audit-choice-card .progress{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:13px;color:var(--accent);font-weight:600;}
+.audit-choice-card .progress .spinner{border-color:rgba(46,230,214,.25);border-top-color:var(--accent);width:14px;height:14px;}
+
+.audit-results{margin-top:24px;}
+.audit-issue{
+  display:flex;gap:12px;padding:14px 16px;border-radius:var(--radius-sm);border:1px solid var(--border);
+  background:var(--surface);margin-bottom:10px;
+}
+.audit-issue .badge{
+  flex:none;font-size:11px;padding:3px 9px;border-radius:999px;font-weight:600;height:fit-content;text-transform:uppercase;
+  letter-spacing:.03em;
+}
+.audit-issue .badge.layout{background:rgba(46,230,214,0.18);color:var(--accent);}
+.audit-issue .badge.template{background:rgba(90,184,255,0.18);color:#5AB8FF;}
+.audit-issue .badge.density{background:rgba(255,196,102,0.18);color:var(--warn);}
+.audit-issue .badge.integrity{background:rgba(255,122,122,0.18);color:var(--danger);}
+.audit-issue .badge.content{background:rgba(94,227,166,0.18);color:var(--ok);}
+.audit-issue .desc{font-size:13px;color:var(--text-1);line-height:1.5;}
+.audit-issue .slide{font-size:11px;color:var(--text-2);margin-top:4px;}
+.audit-empty{padding:24px;text-align:center;color:var(--text-2);font-size:14px;}
+
+/* Карта аудита: превью слайдов с рамками (красная — замечание, зелёная — проверки пройдены) */
+.audit-summary{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 18px;}
+.audit-summary .chip{font-size:12px;padding:5px 11px;border-radius:999px;border:1px solid var(--border-strong);color:var(--text-1);background:var(--surface);}
+.audit-summary .chip.bad{border-color:rgba(255,122,122,.5);color:var(--danger);}
+.audit-summary .chip.ok{border-color:rgba(94,227,166,.5);color:var(--ok);}
+.audit-summary .chip.fixed{border-color:rgba(46,230,214,.5);color:var(--accent);}
+.audit-legend{display:flex;gap:16px;font-size:12px;color:var(--text-2);margin:0 0 16px;}
+.audit-legend i{display:inline-block;width:14px;height:10px;border:2px solid;border-radius:2px;vertical-align:-1px;margin-right:6px;}
+.audit-legend .l-bad i{border-color:var(--danger);background:rgba(255,122,122,.15);}
+.audit-legend .l-ok i{border-color:var(--ok);}
+.audit-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;}
+.audit-card{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);overflow:hidden;}
+.audit-card.has-issues{border-color:rgba(255,122,122,.35);}
+.audit-card .head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;font-size:12px;color:var(--text-2);border-bottom:1px solid var(--border);}
+.audit-card .head b{color:var(--text-1);font-weight:600;}
+.audit-card .head .state{font-weight:600;}
+.audit-card .head .state.bad{color:var(--danger);}
+.audit-card .head .state.ok{color:var(--ok);}
+.audit-slide{position:relative;background:#fff;aspect-ratio:16/9;}
+.audit-slide img{display:block;width:100%;height:100%;object-fit:contain;}
+.audit-slide.busy::after{content:'Исправляем…';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(4,12,28,.6);color:#fff;font-size:14px;font-weight:600;}
+.audit-frame{position:absolute;border:2px solid;border-radius:3px;box-sizing:border-box;transition:background .15s,box-shadow .15s;}
+.audit-frame.ok{border-color:rgba(94,227,166,.85);}
+.audit-frame.ok:hover{background:rgba(94,227,166,.10);}
+.audit-frame.bad{border-color:var(--danger);background:rgba(255,122,122,.10);cursor:pointer;}
+.audit-frame.bad:hover,.audit-frame.bad.active{background:rgba(255,122,122,.22);box-shadow:0 0 0 3px rgba(255,122,122,.25);}
+.audit-frame .count{position:absolute;top:-9px;right:-9px;min-width:18px;height:18px;border-radius:999px;background:var(--danger);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 5px;box-shadow:0 2px 6px rgba(0,0,0,.4);}
+.audit-pop{position:absolute;z-index:6;width:min(360px,92%);background:var(--surface-2);border:1px solid var(--border-strong);border-radius:12px;padding:12px 14px;box-shadow:0 18px 48px rgba(0,0,0,.55);}
+.audit-pop .title{font-size:12px;color:var(--text-2);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;}
+.audit-pop .title button{background:none;border:none;color:var(--text-2);cursor:pointer;font-size:16px;line-height:1;padding:0 2px;}
+.audit-pop .audit-issue{padding:10px 12px;margin-bottom:8px;background:var(--surface);}
+.audit-pop .actions{display:flex;gap:8px;align-items:center;margin-top:4px;flex-wrap:wrap;}
+.audit-pop .manual{font-size:12px;color:var(--text-2);}
+.audit-slide-issues{padding:10px 14px 12px;border-top:1px solid var(--border);}
+.audit-slide-issues .audit-issue{padding:9px 12px;margin-bottom:6px;background:var(--surface-2);}
+.audit-slide-issues .audit-issue:last-child{margin-bottom:0;}
+.audit-slide-issues .hint{font-size:11px;color:var(--text-2);margin-top:4px;}
+.btn.small{padding:6px 12px;font-size:12px;border-radius:8px;}
+.btn.danger{background:rgba(255,122,122,.16);border-color:rgba(255,122,122,.5);color:var(--danger);}
+.btn.danger:hover{background:rgba(255,122,122,.26);border-color:var(--danger);}
+.btn:disabled{opacity:.55;cursor:wait;}
+
+/* ---------- Export screen ---------- */
+.export-grid{display:flex;gap:16px;margin-top:24px;flex-wrap:wrap;}
+.export-card{
+  flex:1;min-width:200px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:26px;text-align:center;cursor:pointer;transition:all .2s ease;
+}
+.export-card:hover{border-color:var(--accent);transform:translateY(-3px);}
+.export-card .ext{font-size:28px;font-weight:700;margin-bottom:8px;color:var(--accent);}
+.export-card .label{font-size:14px;color:var(--text-1);}
+.export-card.downloading{opacity:.6;pointer-events:none;}
+
+/* ---------- Misc ---------- */
+.status-line{font-size:13px;color:var(--text-2);margin-top:14px;}
+.status-line.error{color:var(--danger);}
+.error-box{background:rgba(255,122,122,0.1);border:1px solid rgba(255,122,122,0.3);border-radius:var(--radius-sm);padding:16px;color:#fca5a5;font-size:14px;margin-top:16px;}
+.back-link{font-size:13px;color:var(--text-2);cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin-bottom:20px;}
+.back-link:hover{color:var(--text-0);}
+
+@media (max-width: 860px){
+  .pipeline-side{position:fixed;right:0;top:0;bottom:0;z-index:100;box-shadow:-20px 0 40px rgba(0,0,0,0.4);}
+  .pipeline-main{padding:100px 24px 60px;}
+  .topbar{padding:16px 18px;}
+  .cases-field{height:auto;position:static;display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:20px;}
+  .case-pill{position:static;animation:none;}
+}
+</style>
 </head>
 <body>
 
-<h1>Тест-фронт генератора презентаций (минимальный, без стилей)</h1>
+<div id="stage" aria-hidden="true"></div>
+<div class="app">
 
-<p>
-  Адрес backend API (пусто = тот же домен, например на проде):
-  <input type="text" id="apiBase" value="" size="40" placeholder="например http://127.0.0.1:8811 для локальной разработки">
-</p>
-
-<hr>
-
-<h2>1. Создать задачу (job)</h2>
-
-<form id="createJobForm">
-  <p>
-    Шаблон презентации (.pptx):<br>
-    <input type="file" id="templateFile" accept=".pptx" required>
-  </p>
-  <p>
-    Бриф:<br>
-    <textarea id="brief" rows="3" cols="60">Короткая презентация о нашем продукте</textarea>
-  </p>
-  <p>
-    Назначение (purpose):<br>
-    <input type="text" id="purpose" value="business" size="40">
-  </p>
-
-  <h3>Данные для слайдов (таблицы/графики) — выберите способ ввода</h3>
-
-  <p>
-    <label><input type="radio" name="dataMode" value="none" checked> Без данных (только LLM-контент по брифу, если backend настроен на LLM)</label><br>
-    <label><input type="radio" name="dataMode" value="json"> Готовый ContentPlan в виде JSON</label><br>
-    <label><input type="radio" name="dataMode" value="excel"> Excel-файл (данные будут добавлены после создания задачи)</label>
-  </p>
-
-  <div id="jsonModeBlock" style="display:none;">
-    <p>ContentPlan JSON (структура: brief/purpose/slides[].content_blocks[].table|chart):</p>
-    <textarea id="contentPlanJson" rows="14" cols="80">{
-  "brief": "Тест",
-  "purpose": "demo",
-  "slides": [
-    {
-      "slide_id": "slide-1",
-      "purpose": "intro",
-      "title": "Финансовые показатели",
-      "content_blocks": [
-        {
-          "type": "table",
-          "table": {
-            "headers": ["Показатель", "Q1", "Q2"],
-            "rows": [["Выручка", "100", "120"], ["Прибыль", "20", "25"]]
-          }
-        }
-      ]
-    },
-    {
-      "slide_id": "slide-2",
-      "purpose": "chart",
-      "title": "Динамика продаж",
-      "content_blocks": [
-        {
-          "type": "chart",
-          "chart": {
-            "chart_type": "line",
-            "categories": ["Янв", "Фев", "Мар"],
-            "series": {"Продажи": [5, 8, 12]}
-          }
-        }
-      ]
-    }
-  ]
-}</textarea>
+  <!-- ============ TOP BAR ============ -->
+  <div class="topbar" id="topbar">
+    <a class="wordmark" id="wordmarkHome" href="#" title="На главную">AI-дизайнер <span class="grad">презентаций</span></a>
   </div>
 
-  <div id="excelModeBlock" style="display:none;">
-    <p>
-      Excel-файл (.xlsx) для последующей догрузки после создания задачи —
-      минимальный ContentPlan без блоков будет создан автоматически (один слайд slide-1):<br>
-      <input type="file" id="excelFileForCreate" accept=".xlsx">
-    </p>
-    <p>
-      Имя листа (пусто = первый лист):<br>
-      <input type="text" id="excelSheetNameForCreate" size="30">
-    </p>
-    <p>
-      Тип данных на листе:<br>
-      <select id="excelKindForCreate">
-        <option value="">Автоопределение</option>
-        <option value="table">Таблица</option>
-        <option value="chart">График</option>
-      </select>
-    </p>
+  <!-- ============ SCREEN 0: LANDING ============ -->
+  <section class="screen visible" id="screen-landing" style="padding:0;">
+    <div class="landing">
+            <div class="landing-inner">
+        <h1>AI-дизайнер <span class="grad">презентаций</span></h1>
+        <p class="hero-sub">Загрузите презентацию-ориентир по&nbsp;стилю, опишите задачу&nbsp;— и&nbsp;получите три варианта готовой презентации на&nbsp;выбор.</p>
+
+        <div class="prompt-shell">
+          <button class="prompt-icon-btn" id="attachBtn" type="button" title="Приложить референс-презентацию">+</button>
+          <textarea id="promptInput" rows="1" placeholder="Опишите задачу: для чего презентация, о чём рассказать, какой тон…"></textarea>
+          <button class="send-btn" id="sendBtn" type="button" title="Начать генерацию">→</button>
+        </div>
+        <input type="file" id="referenceFile" accept=".pptx" style="display:none;">
+        <div class="attach-row" id="attachRow"></div>
+
+        <div class="params" id="paramsPanel">
+          <div class="row3">
+            <div class="field">
+              <label>Сценарий</label>
+              <div class="selwrap"><select id="selScenario"></select></div>
+            </div>
+            <div class="field">
+              <label>Аудитория</label>
+              <div class="selwrap"><select id="selAudience">
+                <option value="">Не уточнять</option>
+                <option value="Руководство / инвесторы">Руководство / инвесторы</option>
+                <option value="Клиенты / партнёры">Клиенты / партнёры</option>
+                <option value="Внутренняя команда">Внутренняя команда</option>
+                <option value="Широкая / незнакомая аудитория">Широкая аудитория</option>
+                <option value="__custom">Свой вариант…</option>
+              </select></div>
+              <input class="opt-input" id="audCustom" type="text" placeholder="Например: преподаватели вузов">
+            </div>
+            <div class="field">
+              <label>Тон изложения</label>
+              <div class="selwrap"><select id="selTone">
+                <option value="">Не уточнять</option>
+                <option value="Формальный и сдержанный">Формальный</option>
+                <option value="Дружелюбный и разговорный">Дружелюбный</option>
+                <option value="Энергичный, продающий">Энергичный / продающий</option>
+                <option value="Технический, с деталями">Технический</option>
+                <option value="__custom">Свой вариант…</option>
+              </select></div>
+              <input class="opt-input" id="toneCustom" type="text" placeholder="Например: ироничный, но по делу">
+            </div>
+          </div>
+
+          <div class="field vol">
+            <label>Объём <span class="val" id="slidesHint">8–12 слайдов</span></label>
+            <div class="slides-row">
+              <input class="num" id="numMin" type="number" min="3" value="8">
+              <div class="range">
+                <div class="track"></div><div class="fill" id="rangeFill"></div>
+                <input type="range" id="rMin" min="3" max="30" value="8">
+                <input type="range" id="rMax" min="3" max="30" value="12">
+                <div class="ticks"><span>3</span><span>10</span><span>20</span><span>30</span></div>
+              </div>
+              <input class="num" id="numMax" type="number" min="3" value="12">
+            </div>
+          </div>
+
+          <div class="preset-note" id="presetNote" hidden>
+            <label>Инструкция агенту</label>
+            <div>
+              <div class="txt" id="presetTxt"></div>
+              <div class="edit">Подставляется из&nbsp;сценария; аудиторию, тон и&nbsp;объём выше можно поменять · <a id="editScenarioLink">редактировать сценарии</a></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SCREEN 2: PIPELINE ============ -->
+  <section class="pipeline-screen" id="screen-pipeline">
+    <div class="pipeline-main">
+      <div class="back-link-row"><div class="back-link" id="backToLandingFromPipeline">← Новая задача</div></div>
+
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-track"><div class="progress-bar-fill" id="progressFill" style="width:4%;"></div></div>
+        <div class="progress-bar-label"><span id="progressStageLabel">Постановка задачи</span><b id="progressPct">4%</b></div>
+      </div>
+
+      <div class="timeline" id="timeline"></div>
+
+      <div id="stageContent"></div>
+    </div>
+
+    <aside class="pipeline-side" id="dsPanel">
+      <div class="ds-panel-header">
+        <div>
+          <h3>Дизайн-система шаблона</h3>
+          <p>Извлечена автоматически из вашей презентации-ориентира</p>
+        </div>
+        <button type="button" class="ds-panel-close" id="dsPanelClose" title="Закрыть" aria-label="Закрыть панель">✕</button>
+      </div>
+      <div class="ds-panel-body" id="dsPanelBody"></div>
+    </aside>
+
+    <aside class="pipeline-side" id="planPanel">
+      <div class="ds-panel-header">
+        <div>
+          <h3>План содержания</h3>
+          <p>Структура и содержание слайдов, подготовленные моделью по вашей задаче; по этому плану собираются все три варианта</p>
+        </div>
+        <button type="button" class="ds-panel-close" id="planPanelClose" title="Закрыть" aria-label="Закрыть панель">✕</button>
+      </div>
+      <div class="ds-panel-body" id="planPanelBody"></div>
+    </aside>
+  </section>
+
+</div>
+
+<!-- ============ CASE MANAGER MODAL ============ -->
+<div class="modal-overlay" id="confirmModalOverlay" style="display:none;">
+  <div class="modal" style="max-width:420px;">
+    <h2 id="confirmModalTitle">Подтвердите действие</h2>
+    <p class="sub" id="confirmModalText"></p>
+    <div class="modal-footer" style="justify-content:flex-end;gap:10px;">
+      <button class="btn ghost" id="confirmModalCancelBtn" type="button">Отмена</button>
+      <button class="btn primary" id="confirmModalOkBtn" type="button">Продолжить</button>
+    </div>
   </div>
+</div>
 
-  <p><button type="submit">Создать задачу</button></p>
-</form>
-
-<pre id="createJobResult"></pre>
-
-<hr>
-
-<h2>2. Статус задачи</h2>
-
-<form id="statusForm">
-  <p>
-    Job ID:<br>
-    <input type="text" id="statusJobId" size="50">
-    <button type="submit">Проверить статус</button>
-    <button type="button" id="pollButton">Опрашивать каждые 2 сек</button>
-    <button type="button" id="stopPollButton">Остановить опрос</button>
-  </p>
-</form>
-
-<pre id="statusResult"></pre>
-
-<hr>
-
-<h2>3. Догрузить данные в слайд существующей задачи</h2>
-
-<form id="addDataForm">
-  <p>
-    Job ID:<br>
-    <input type="text" id="addDataJobId" size="50">
-  </p>
-  <p>
-    Slide ID:<br>
-    <input type="text" id="addDataSlideId" size="20" value="slide-1">
-  </p>
-
-  <p>
-    <label><input type="radio" name="addDataMode" value="json" checked> Добавить готовый JSON-блок (ContentBlock)</label><br>
-    <label><input type="radio" name="addDataMode" value="excel"> Добавить из Excel-файла</label>
-  </p>
-
-  <div id="addJsonBlock">
-    <p>ContentBlock JSON:</p>
-    <textarea id="addContentBlockJson" rows="8" cols="80">{
-  "type": "table",
-  "table": {
-    "headers": ["Показатель", "Значение"],
-    "rows": [["A", "1"], ["B", "2"]]
-  }
-}</textarea>
+<div class="modal-overlay" id="caseModalOverlay" style="display:none;">
+  <div class="modal">
+    <h2>Сценарии</h2>
+    <p class="sub">Сценарий&nbsp;— заготовка, которая задаёт объём, аудиторию, тон и&nbsp;инструкцию агенту. Добавляйте свои и&nbsp;меняйте существующие&nbsp;— всё хранится в&nbsp;этом браузере.</p>
+    <div id="caseEditList"></div>
+    <button class="btn ghost" id="addCaseBtn" type="button" style="width:100%;margin-top:6px;">+ Добавить сценарий</button>
+    <div class="modal-footer">
+      <button class="btn danger-ghost" id="resetCasesBtn" type="button">Сбросить к стандартным</button>
+      <button class="btn primary" id="closeCaseModalBtn" type="button">Готово</button>
+    </div>
   </div>
+</div>
 
-  <div id="addExcelBlock" style="display:none;">
-    <p>
-      Excel-файл (.xlsx):<br>
-      <input type="file" id="addExcelFile" accept=".xlsx">
-    </p>
-    <p>
-      Имя листа (пусто = первый лист):<br>
-      <input type="text" id="addExcelSheetName" size="30">
-    </p>
-    <p>
-      Тип данных на листе:<br>
-      <select id="addExcelKind">
-        <option value="">Автоопределение</option>
-        <option value="table">Таблица</option>
-        <option value="chart">График</option>
-      </select>
-    </p>
-  </div>
-
-  <p><button type="submit">Добавить данные к слайду</button></p>
-</form>
-
-<pre id="addDataResult"></pre>
-
-<p>
-  После добавления данных к уже собранной задаче (статус done/failed) нужно вызвать
-  пересборку, чтобы Компоновщик учёл новый блок:
-</p>
-<p>
-  Важно: слайды шаблона имеют ограниченное число мест под таблицы/графики.
-  Если на один slide_id добавить больше блоков, чем есть подходящих плейсхолдеров
-  (например, две таблицы при одном табличном слоте), лишний блок будет размещён
-  в текстовый плейсхолдер и может визуально наложиться на другие элементы.
-  Для каждого нового набора данных лучше использовать отдельный slide_id.
-</p>
-<form id="fixForm">
-  <p>
-    Job ID:<br>
-    <input type="text" id="fixJobId" size="50">
-    <button type="submit">Пересобрать (POST /jobs/{id}/fix)</button>
-  </p>
-</form>
-<pre id="fixResult"></pre>
-
-<hr>
-
-<h2>4. Просмотреть листы Excel (без создания задачи)</h2>
-
-<form id="sheetsForm">
-  <p>
-    Excel-файл (.xlsx):<br>
-    <input type="file" id="sheetsFile" accept=".xlsx">
-    <button type="submit">Показать листы</button>
-  </p>
-</form>
-<pre id="sheetsResult"></pre>
-
-<hr>
-
-<h2>5. Скачать результат</h2>
-
-<form id="exportForm">
-  <p>
-    Job ID:<br>
-    <input type="text" id="exportJobId" size="50">
-  </p>
-  <p>
-    Вариант вёрстки:
-    <select id="exportVariant">
-      <option value="variant_a">variant_a</option>
-      <option value="variant_b">variant_b</option>
-      <option value="variant_c">variant_c</option>
-    </select>
-  </p>
-  <p>
-    Формат:
-    <select id="exportFormat">
-      <option value="pptx">pptx</option>
-      <option value="pdf">pdf</option>
-      <option value="html">html</option>
-    </select>
-  </p>
-  <p><button type="submit">Скачать</button></p>
-</form>
-<p><small>Job теперь всегда собирает три варианта вёрстки (variant_a/b/c) — статус job (раздел 3) вернёт все три пути в <code>variant_paths</code> и проблемы аудита по каждому в <code>audit_issues</code>.</small></p>
-
+<script src="ocean-aura.js"></script>
 <script>
-function apiBase() {
-  return document.getElementById('apiBase').value.replace(/\/$/, '');
+(function(){
+"use strict";
+
+/* ======================================================================
+   0. API / CONFIG
+====================================================================== */
+function apiBase(){
+  // Пусто = тот же домен (прод за nginx-прокси). Для локальной разработки
+  // можно переопределить через localStorage.df_api_base в консоли браузера.
+  return window.localStorage.getItem('df_api_base') || '';
+}
+async function api(path, opts){
+  opts = opts || {};
+  var resp = await fetch(apiBase() + path, opts);
+  if(!resp.ok){
+    var detail = '';
+    try{ var j = await resp.json(); detail = j.detail || JSON.stringify(j); }catch(e){ detail = resp.statusText; }
+    throw new Error(detail || ('HTTP ' + resp.status));
+  }
+  var ct = resp.headers.get('content-type') || '';
+  if(ct.indexOf('application/json') !== -1) return resp.json();
+  return resp;
 }
 
-// --- Переключение режимов ввода данных при создании задачи ---
-document.querySelectorAll('input[name="dataMode"]').forEach(function (radio) {
-  radio.addEventListener('change', function () {
-    var mode = document.querySelector('input[name="dataMode"]:checked').value;
-    document.getElementById('jsonModeBlock').style.display = (mode === 'json') ? 'block' : 'none';
-    document.getElementById('excelModeBlock').style.display = (mode === 'excel') ? 'block' : 'none';
+/* ======================================================================
+   1. CASE PRESETS — seeded defaults + localStorage persistence, editable UI
+====================================================================== */
+var CASES_KEY = 'df_cases_v1';
+
+var DEFAULT_CASES = [
+  {
+    id: 'sales',
+    label: 'Для продаж',
+    placeholder: 'Опишите продукт/услугу и кому вы её продаёте — соберём питч с акцентом на выгоды и следующий шаг.',
+    slide_count: 10, slide_min: 8, slide_max: 12,
+    audience: 'Клиенты / партнёры', tone: 'Энергичный, продающий',
+    prompt_addition: 'Это презентация для продаж (питч). Структура: проблема клиента → решение → ключевые выгоды и цифры → социальное доказательство/кейсы → цена или условия → чёткий призыв к действию на последнем слайде. Тон энергичный и уверенный, избегай длинных технических деталей, фокус на ценности для клиента.'
+  },
+  {
+    id: 'project_report',
+    label: 'Отчёт по проекту',
+    placeholder: 'Опишите проект и период отчёта — соберём структуру со статусом, метриками и рисками.',
+    slide_count: 12, slide_min: 10, slide_max: 14,
+    audience: 'Руководство / инвесторы', tone: 'Формальный и сдержанный',
+    prompt_addition: 'Это отчёт по проекту для стейкхолдеров. Структура: краткое резюме статуса → цели периода и что сделано → ключевые метрики и цифры (используй графики/таблицы там, где уместно) → проблемы и риски → план на следующий период. Тон деловой, сдержанный, опирайся на факты и цифры, избегай эмоциональных формулировок.'
+  },
+  {
+    id: 'solution_alignment',
+    label: 'Согласование решения',
+    placeholder: 'Опишите решение, которое нужно согласовать, и с кем — соберём структуру для обсуждения и решения.',
+    slide_count: 8, slide_min: 6, slide_max: 10,
+    audience: 'Внутренняя команда', tone: 'Технический, с деталями',
+    prompt_addition: 'Это презентация для согласования технического или бизнес-решения с коллегами/руководством. Структура: контекст и задача → рассмотренные варианты (кратко, желательно таблица сравнения) → рекомендуемое решение и обоснование → риски и компромиссы → что требуется от аудитории (решение/ресурсы/сроки). Тон нейтральный и аналитический, явно проговаривай trade-off-ы.'
+  },
+  {
+    id: 'new_direction',
+    label: 'Новое направление',
+    placeholder: 'Опишите идею нового направления или продукта — соберём презентацию для защиты концепции.',
+    slide_count: 10, slide_min: 10, slide_max: 14,
+    audience: 'Руководство / инвесторы', tone: 'Энергичный, продающий',
+    prompt_addition: 'Это презентация совершенно нового направления, продукта или инициативы — аудитория видит идею впервые. Структура: почему сейчас (контекст/тренд) → в чём идея → как это будет работать → потенциал и масштаб возможности → что нужно, чтобы начать. Тон вдохновляющий, но обоснованный, избегай излишнего наукообразия, объясняй просто.'
+  },
+  {
+    id: 'training',
+    label: 'Обучение и онбординг',
+    placeholder: 'Опишите тему обучения и уровень аудитории — соберём последовательный обучающий материал.',
+    slide_count: 14, slide_min: 12, slide_max: 18,
+    audience: 'Широкая / незнакомая аудитория', tone: 'Дружелюбный и разговорный',
+    prompt_addition: 'Это обучающий материал / онбординг. Структура: зачем это нужно изучающему → пошаговое объяснение от простого к сложному → примеры и типичные ошибки → краткое резюме и памятка в конце. Тон дружелюбный и терпеливый, короткие предложения, избегай жаргона без объяснения.'
+  }
+];
+
+function loadCases(){
+  try{
+    var raw = window.localStorage.getItem(CASES_KEY);
+    if(!raw) { window.localStorage.setItem(CASES_KEY, JSON.stringify(DEFAULT_CASES)); return DEFAULT_CASES.slice(); }
+    var parsed = JSON.parse(raw);
+    if(!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_CASES.slice();
+    return parsed;
+  }catch(e){ return DEFAULT_CASES.slice(); }
+}
+function saveCases(cases){ window.localStorage.setItem(CASES_KEY, JSON.stringify(cases)); }
+
+var state = {
+  cases: loadCases(),
+  activeCaseId: null,
+  referenceFile: null,
+  params: { audience: '', tone: '', slide_min: 8, slide_max: 12 },
+  jobId: null,
+  templateAnalysisId: null,
+  designSystem: null,
+  jobStatus: null,
+  pollTimer: null,
+  selectedVariant: null,
+  auditIssues: null
+};
+
+/* ======================================================================
+   2. LANDING — case pills + prompt input
+====================================================================== */
+/* --- Сценарий (бывшие кейсы): выпадающий список, по умолчанию «Свой» --- */
+var selScenario = document.getElementById('selScenario');
+var selAudience = document.getElementById('selAudience');
+var selTone = document.getElementById('selTone');
+var audCustom = document.getElementById('audCustom');
+var toneCustom = document.getElementById('toneCustom');
+var presetNote = document.getElementById('presetNote');
+var presetTxt = document.getElementById('presetTxt');
+var DEFAULT_PLACEHOLDER = 'Опишите задачу: для чего презентация, о чём рассказать, что обязательно должно быть на слайдах…';
+
+function renderScenarioSelect(){
+  var current = state.activeCaseId || 'own';
+  selScenario.innerHTML = '';
+  var own = document.createElement('option'); own.value = 'own'; own.textContent = 'Свой — по тексту запроса'; selScenario.appendChild(own);
+  state.cases.forEach(function(c){
+    var o = document.createElement('option'); o.value = c.id; o.textContent = c.label; selScenario.appendChild(o);
   });
-});
+  var add = document.createElement('option'); add.value = '__new'; add.textContent = '+ Создать новый сценарий…'; selScenario.appendChild(add);
+  var exists = state.cases.some(function(c){ return c.id === current; });
+  selScenario.value = exists ? current : 'own';
+  if(!exists) state.activeCaseId = null;
+  selScenario.classList.toggle('set', selScenario.value !== 'own');
+}
 
-document.querySelectorAll('input[name="addDataMode"]').forEach(function (radio) {
-  radio.addEventListener('change', function () {
-    var mode = document.querySelector('input[name="addDataMode"]:checked').value;
-    document.getElementById('addJsonBlock').style.display = (mode === 'json') ? 'block' : 'none';
-    document.getElementById('addExcelBlock').style.display = (mode === 'excel') ? 'block' : 'none';
-  });
-});
+/* Применяет сценарий к панели: объём, аудитория, тон, инструкция. withDefaults=false —
+   только обновить текст инструкции (после редактирования сценариев). */
+function applyScenario(id, withDefaults){
+  var c = state.cases.filter(function(x){ return x.id === id; })[0];
+  state.activeCaseId = c ? c.id : null;
+  selScenario.classList.toggle('set', !!c);
+  if(!c){ presetNote.hidden = true; promptInput.placeholder = DEFAULT_PLACEHOLDER; autosizePrompt(); return; }
+  if(withDefaults){
+    var r = caseRange(c);
+    rMin.value = r[0]; rMax.value = r[1]; syncRange('max');
+    setSelectValue(selAudience, audCustom, c.audience || '');
+    setSelectValue(selTone, toneCustom, c.tone || '');
+    if(!promptInput.value.trim()) promptInput.placeholder = c.placeholder || DEFAULT_PLACEHOLDER;
+    autosizePrompt();
+  }
+  presetTxt.innerHTML = '<b>Сценарий «' + escapeHtml(c.label) + '».</b> ' + escapeHtml(c.prompt_addition || 'Инструкция не задана — генерация идёт по тексту запроса.');
+  presetNote.hidden = false;
+}
 
-// --- 1. Создание задачи ---
-document.getElementById('createJobForm').addEventListener('submit', async function (e) {
-  e.preventDefault();
-  var out = document.getElementById('createJobResult');
-  out.textContent = 'Отправка...';
-
-  var templateFile = document.getElementById('templateFile').files[0];
-  if (!templateFile) {
-    out.textContent = 'Выберите файл шаблона .pptx';
+selScenario.addEventListener('change', function(){
+  if(selScenario.value === '__new'){
+    selScenario.value = state.activeCaseId || 'own';
+    document.getElementById('addCaseBtn').click();
+    openCaseModal();
     return;
   }
+  applyScenario(selScenario.value === 'own' ? null : selScenario.value, true);
+});
+document.getElementById('editScenarioLink').addEventListener('click', openCaseModal);
 
-  var mode = document.querySelector('input[name="dataMode"]:checked').value;
+/* Селекты аудитории/тона с пунктом «Свой вариант…» */
+function bindCustomSelect(sel, input, key){
+  sel.addEventListener('change', function(){
+    var custom = sel.value === '__custom';
+    input.classList.toggle('show', custom);
+    sel.classList.toggle('set', sel.value !== '');
+    state.params[key] = custom ? input.value.trim() : sel.value;
+    if(custom && !input.value) input.focus();
+  });
+  input.addEventListener('input', function(){ state.params[key] = input.value.trim(); });
+}
+function setSelectValue(sel, input, value){
+  var found = false;
+  for(var i=0;i<sel.options.length;i++){ if(sel.options[i].value === value){ sel.value = value; found = true; break; } }
+  if(!found && value){ sel.value = '__custom'; input.value = value; }
+  else if(!found){ sel.value = ''; input.value = ''; }
+  sel.dispatchEvent(new Event('change'));
+}
+bindCustomSelect(selAudience, audCustom, 'audience');
+bindCustomSelect(selTone, toneCustom, 'tone');
 
-  var formData = new FormData();
-  formData.append('template', templateFile);
-  formData.append('brief', document.getElementById('brief').value);
-  formData.append('purpose', document.getElementById('purpose').value);
-
-  if (mode === 'json') {
-    formData.append('content_plan', document.getElementById('contentPlanJson').value);
-  } else if (mode === 'excel') {
-    // Минимальный план-заглушка с одним пустым слайдом — данные из Excel
-    // догружаются отдельным запросом (шаг 3) после создания задачи, потому
-    // что один лист Excel соответствует одному content_block для одного слайда,
-    // а не целой презентации.
-    var stubPlan = {
-      brief: document.getElementById('brief').value,
-      purpose: document.getElementById('purpose').value,
-      slides: [
-        { slide_id: 'slide-1', purpose: 'data', title: 'Данные из Excel', content_blocks: [] }
-      ]
-    };
-    formData.append('content_plan', JSON.stringify(stubPlan));
+/* Ползунки объёма: два ползунка на одной шкале; сведённые в одну точку — точное число */
+var rMin = document.getElementById('rMin'), rMax = document.getElementById('rMax'),
+    nMin = document.getElementById('numMin'), nMax = document.getElementById('numMax'),
+    rangeFill = document.getElementById('rangeFill'), slidesHint = document.getElementById('slidesHint');
+function rangePct(v){ return (v - 3) / 27 * 100; }
+function syncRange(from){
+  var a = +rMin.value, b = +rMax.value;
+  if(a > b){ if(from === 'min'){ rMax.value = a; b = a; } else { rMin.value = b; a = b; } }
+  nMin.value = a; nMax.value = b;
+  rangeFill.style.left = rangePct(a) + '%'; rangeFill.style.width = (rangePct(b) - rangePct(a)) + '%';
+  slidesHint.textContent = a === b ? (a + ' ' + pluralRu(a, 'слайд', 'слайда', 'слайдов')) : (a + '–' + b + ' слайдов');
+  // у правого края верхний ползунок перекрывает нижний — меняем порядок, чтобы оба оставались доступны
+  rMin.style.zIndex = (a === b && a > 16) ? 3 : 1; rMax.style.zIndex = 2;
+  state.params.slide_min = a; state.params.slide_max = b;
+}
+rMin.addEventListener('input', function(){ syncRange('min'); });
+rMax.addEventListener('input', function(){ syncRange('max'); });
+var MAX_SLIDES = 30;
+function clampSlides(raw, fallback){
+  var v = parseInt(raw, 10);
+  if(isNaN(v)) return fallback;
+  if(v > MAX_SLIDES){
+    showInfoModal('Пока не больше ' + MAX_SLIDES + ' слайдов',
+      'Сейчас сервис собирает презентации объёмом до ' + MAX_SLIDES + ' слайдов — так мы держим качество вёрстки и время генерации.');
+    return MAX_SLIDES;
   }
-  // mode === 'none' -> content_plan не передаём, backend сам вызовет LLM-контент-агента
+  return Math.max(3, v);
+}
+nMin.addEventListener('change', function(){ rMin.value = clampSlides(nMin.value, 3); syncRange('min'); });
+nMax.addEventListener('change', function(){ rMax.value = clampSlides(nMax.value, MAX_SLIDES); syncRange('max'); });
 
-  try {
-    var resp = await fetch(apiBase() + '/jobs', { method: 'POST', body: formData });
-    var data = await resp.json();
-    out.textContent = JSON.stringify(data, null, 2);
+var promptInput = document.getElementById('promptInput');
+function autosizePrompt(){
+  promptInput.style.height = 'auto';
+  promptInput.style.height = Math.min(promptInput.scrollHeight, 180) + 'px';
+}
+promptInput.addEventListener('input', autosizePrompt);
+// Enter отправляет форму (как в чатах), перенос строки — по Shift+Enter.
+promptInput.addEventListener('keydown', function(e){
+  if(e.key === 'Enter' && !e.shiftKey){
+    e.preventDefault();
+    sendBtn.click();
+  }
+});
 
-    if (resp.ok && data.job_id) {
-      document.getElementById('statusJobId').value = data.job_id;
-      document.getElementById('addDataJobId').value = data.job_id;
-      document.getElementById('fixJobId').value = data.job_id;
-      document.getElementById('exportJobId').value = data.job_id;
+var attachBtn = document.getElementById('attachBtn');
+var referenceFile = document.getElementById('referenceFile');
+var attachRow = document.getElementById('attachRow');
+attachBtn.addEventListener('click', function(){ referenceFile.click(); });
+referenceFile.addEventListener('change', function(){
+  if(referenceFile.files && referenceFile.files[0]){
+    state.referenceFile = referenceFile.files[0];
+    renderAttachRow();
+  }
+});
+function renderAttachRow(){
+  attachRow.innerHTML = '';
+  if(!state.referenceFile) return;
+  var chip = document.createElement('div');
+  chip.className = 'attach-chip';
+  chip.innerHTML = '<span>📎 ' + state.referenceFile.name + ' (ориентир по стилю)</span>';
+  var rm = document.createElement('button');
+  rm.type = 'button'; rm.textContent = '✕';
+  rm.addEventListener('click', function(){ state.referenceFile = null; referenceFile.value=''; renderAttachRow(); });
+  chip.appendChild(rm);
+  attachRow.appendChild(chip);
+}
 
-      // Если выбран режим Excel — сразу догружаем файл в slide-1.
-      if (mode === 'excel') {
-        var excelFile = document.getElementById('excelFileForCreate').files[0];
-        if (excelFile) {
-          out.textContent += '\n\nЗадача создана, догружаю Excel в slide-1...';
-          var excelForm = new FormData();
-          excelForm.append('file', excelFile);
-          var sheetName = document.getElementById('excelSheetNameForCreate').value;
-          var kind = document.getElementById('excelKindForCreate').value;
-          if (sheetName) excelForm.append('sheet_name', sheetName);
-          if (kind) excelForm.append('kind', kind);
+var sendBtn = document.getElementById('sendBtn');
+sendBtn.addEventListener('click', async function(){
+  var text = promptInput.value.trim();
+  if(!text){
+    promptInput.focus();
+    promptInput.placeholder = 'Опишите хотя бы в двух словах, что нужно сделать…';
+    return;
+  }
+  if(!state.referenceFile){
+    // референс обязателен — без него нечего извлекать дизайн-систему и бэкенд откажет запрос — подсвечиваем поле вместо блокирующего диалога
+    attachBtn.style.borderColor = 'var(--danger)';
+    attachBtn.title = 'Приложите презентацию-ориентир — она обязательна, чтобы извлечь дизайн-систему';
+    setTimeout(function(){ attachBtn.style.borderColor = ''; }, 1200);
+    showToast('Нужна презентация-ориентир: из неё извлекаются палитра, шрифты и макеты. Нажмите «+», чтобы её приложить.', true);
+    return;
+  }
+  launchPipeline();
+});
 
-          var importResp = await fetch(
-            apiBase() + '/jobs/' + data.job_id + '/slides/slide-1/import-excel',
-            { method: 'POST', body: excelForm }
-          );
-          var importData = await importResp.json();
-          out.textContent += '\n\nРезультат импорта Excel:\n' + JSON.stringify(importData, null, 2);
+/* ======================================================================
+   3. CASE MANAGER MODAL (CRUD in localStorage)
+====================================================================== */
+var caseModalOverlay = document.getElementById('caseModalOverlay');
+var caseEditList = document.getElementById('caseEditList');
 
-          if (importResp.ok) {
-            out.textContent += '\n\nТеперь вызовите "Пересобрать" (раздел 3) для job_id ' + data.job_id + ', чтобы применить данные.';
-          }
+function openCaseModal(){
+  renderCaseEditList();
+  caseModalOverlay.style.display = 'flex';
+}
+function closeCaseModal(){
+  caseModalOverlay.style.display = 'none';
+  renderScenarioSelect();
+  applyScenario(state.activeCaseId, false);
+}
+/* Диапазон слайдов сценария; для старых записей в localStorage (только slide_count) — ±2. */
+function caseRange(c){
+  var n = parseInt(c.slide_count, 10) || 10;
+  var lo = c.slide_min != null ? c.slide_min : Math.max(3, n - 2);
+  var hi = c.slide_max != null ? c.slide_max : Math.min(30, n + 2);
+  return [Math.min(lo, hi), Math.max(lo, hi)];
+}
+document.getElementById('closeCaseModalBtn').addEventListener('click', closeCaseModal);
+caseModalOverlay.addEventListener('click', function(e){ if(e.target === caseModalOverlay) closeCaseModal(); });
+
+document.getElementById('resetCasesBtn').addEventListener('click', async function(){
+  var ok = await askConfirm('Вернуть стандартный набор сценариев? Ваши изменения будут потеряны.');
+  if(!ok) return;
+  state.cases = JSON.parse(JSON.stringify(DEFAULT_CASES));
+  saveCases(state.cases);
+  renderCaseEditList();
+});
+
+document.getElementById('addCaseBtn').addEventListener('click', function(){
+  state.cases.push({
+    id: 'custom_' + Date.now(),
+    label: 'Новый сценарий',
+    placeholder: 'Опишите, для чего эта презентация...',
+    slide_count: 10, slide_min: 8, slide_max: 12,
+    audience: '', tone: '',
+    prompt_addition: ''
+  });
+  saveCases(state.cases);
+  renderCaseEditList();
+});
+
+function renderCaseEditList(){
+  caseEditList.innerHTML = '';
+  state.cases.forEach(function(c, idx){
+    var row = document.createElement('div');
+    row.className = 'case-edit-row';
+    row.innerHTML =
+      '<label>Название сценария</label>' +
+      '<input type="text" data-field="label" value="' + escapeHtml(c.label) + '">' +
+      '<label>Подсказка в поле ввода</label>' +
+      '<input type="text" data-field="placeholder" value="' + escapeHtml(c.placeholder) + '">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+      '<div><label>Слайдов от</label><input type="number" data-field="slide_min" min="3" max="30" value="' + caseRange(c)[0] + '"></div>' +
+      '<div><label>Слайдов до</label><input type="number" data-field="slide_max" min="3" max="30" value="' + caseRange(c)[1] + '"></div>' +
+      '</div>' +
+      '<label>Аудитория (по умолчанию для сценария)</label>' +
+      '<input type="text" data-field="audience" value="' + escapeHtml(c.audience || '') + '" placeholder="Например: Клиенты / партнёры">' +
+      '<label>Тон изложения (по умолчанию для сценария)</label>' +
+      '<input type="text" data-field="tone" value="' + escapeHtml(c.tone || '') + '" placeholder="Например: Формальный и сдержанный">' +
+      '<label>Инструкция агенту (как сценарий влияет на генерацию)</label>' +
+      '<textarea data-field="prompt_addition">' + escapeHtml(c.prompt_addition) + '</textarea>' +
+      '<div class="row-actions"><button class="btn danger-ghost" type="button">Удалить</button></div>';
+
+    row.querySelectorAll('input,textarea').forEach(function(inp){
+      inp.addEventListener('change', function(){
+        var field = inp.getAttribute('data-field');
+        if(field === 'slide_min' || field === 'slide_max'){
+          var v = Math.min(30, Math.max(3, parseInt(inp.value,10) || 10));
+          state.cases[idx][field] = v; inp.value = v;
+          if(field === 'slide_min' && caseRange(state.cases[idx])[1] < v) state.cases[idx].slide_max = v;
+          if(field === 'slide_max' && caseRange(state.cases[idx])[0] > v) state.cases[idx].slide_min = v;
+          var rr = caseRange(state.cases[idx]);
+          state.cases[idx].slide_count = Math.round((rr[0] + rr[1]) / 2);
         } else {
-          out.textContent += '\n\nВНИМАНИЕ: файл Excel не выбран, слайд slide-1 останется без данных.';
+          state.cases[idx][field] = inp.value;
         }
-      }
-    }
-  } catch (err) {
-    out.textContent = 'Ошибка запроса: ' + err;
+        saveCases(state.cases);
+      });
+    });
+    row.querySelector('.row-actions button').addEventListener('click', async function(){
+      var ok = await askConfirm('Удалить сценарий «' + c.label + '»?');
+      if(!ok) return;
+      state.cases.splice(idx, 1);
+      saveCases(state.cases);
+      renderCaseEditList();
+    });
+    caseEditList.appendChild(row);
+  });
+}
+
+/* Неблокирующий аналог confirm() в стиле приложения — нативный confirm() блокирует
+   весь JS-поток страницы (включая поллинг job) и выглядит чужим в тёмном UI. */
+var confirmModalOverlay = document.getElementById('confirmModalOverlay');
+var confirmModalText = document.getElementById('confirmModalText');
+var confirmModalOkBtn = document.getElementById('confirmModalOkBtn');
+var confirmModalCancelBtn = document.getElementById('confirmModalCancelBtn');
+var _confirmResolve = null;
+function askConfirm(text){
+  document.getElementById('confirmModalTitle').textContent = 'Подтвердите действие';
+  confirmModalText.textContent = text;
+  confirmModalCancelBtn.style.display = '';
+  confirmModalOkBtn.textContent = 'Продолжить';
+  confirmModalOverlay.style.display = 'flex';
+  return new Promise(function(resolve){ _confirmResolve = resolve; });
+}
+/* Информационное окно с одной кнопкой (то же оформление, что у подтверждения). */
+function showInfoModal(title, text){
+  document.getElementById('confirmModalTitle').textContent = title;
+  confirmModalText.textContent = text;
+  confirmModalCancelBtn.style.display = 'none';
+  confirmModalOkBtn.textContent = 'Понятно';
+  confirmModalOverlay.style.display = 'flex';
+  return new Promise(function(resolve){ _confirmResolve = resolve; });
+}
+function _resolveConfirm(val){
+  confirmModalOverlay.style.display = 'none';
+  if(_confirmResolve){ var r = _confirmResolve; _confirmResolve = null; r(val); }
+}
+confirmModalOkBtn.addEventListener('click', function(){ _resolveConfirm(true); });
+confirmModalCancelBtn.addEventListener('click', function(){ _resolveConfirm(false); });
+confirmModalOverlay.addEventListener('click', function(e){ if(e.target === confirmModalOverlay) _resolveConfirm(false); });
+
+function escapeHtml(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+/* ======================================================================
+   4. SCREEN NAVIGATION
+====================================================================== */
+var screens = {
+  landing: document.getElementById('screen-landing'),
+};
+var pipelineScreen = document.getElementById('screen-pipeline');
+
+/* Фон: на главной — живой, палитра «abyss-deep»; на внутренних экранах — темнее
+   («abyss-night»), медленная анимация продолжается под затемняющей вуалью (body.inner). */
+var aura = null;
+/* Живой фон — только там, где он уместен и не мешает: на главной, если пользователь
+   не просил меньше движения и машина тянет анимацию. На внутренних экранах и при
+   слабом GPU остаётся статичный кадр (renderAt), без WebGL — CSS-градиент #stage. */
+var auraStill = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+try{
+  aura = OceanAura.create(document.getElementById('stage'), { palette: 'abyss-deep', duration: 320, renderScale: 0.85, autoplay: !auraStill });
+  if(aura && !aura.error){
+    aura.setGrain({ opacity: 0.16 });
+    if(auraStill) aura.renderAt(40);
+  } else { aura = null; }
+}catch(e){ console.warn('Ocean Aura недоступна (нет WebGL?)', e); aura = null; }
+function auraFreeze(){
+  auraStill = true;
+  if(aura){ aura.config.autoplay = false; aura.pause(); }
+}
+/* Сторож производительности: первые ~2 с считаем кадры; если больше половины
+   длиннее 34 мс (ниже 30 fps) — фон останавливается на текущем кадре. */
+(function auraWatchdog(){
+  if(!aura || auraStill) return;
+  var last = performance.now(), n = 0, slow = 0;
+  function tick(t){
+    var dt = t - last; last = t;
+    if(dt > 0){ n++; if(dt > 34) slow++; }
+    if(n < 70) requestAnimationFrame(tick);
+    else if(slow / n > 0.5){ auraFreeze(); console.info('Ocean Aura: остановлена, кадры слишком долгие'); }
   }
-});
+  requestAnimationFrame(tick);
+})();
+function setBackgroundMode(inner){
+  document.body.classList.toggle('inner', inner);
+  if(!aura) return;
+  aura.setPalette(inner ? 'abyss-night' : 'abyss-deep');
+  if(inner || auraStill){ aura.config.autoplay = false; aura.pause(); }
+  else { aura.config.autoplay = true; aura.play(); }
+}
 
-// --- 2. Статус задачи ---
-var pollTimer = null;
+function showScreen(name){
+  Object.keys(screens).forEach(function(k){ screens[k].classList.toggle('visible', k === name); });
+  pipelineScreen.classList.toggle('visible', name === 'pipeline');
+  document.getElementById('topbar').classList.toggle('solid', name !== 'landing');
+  setBackgroundMode(name !== 'landing');
+  window.scrollTo(0,0);
+}
 
-async function checkStatus() {
-  var jobId = document.getElementById('statusJobId').value.trim();
-  var out = document.getElementById('statusResult');
-  if (!jobId) {
-    out.textContent = 'Укажите Job ID';
+function goHome(){
+  if(state.pollTimer) clearInterval(state.pollTimer);
+  closeDsPanel();
+  closePlanPanel();
+  document.querySelector('.pipeline-main').classList.remove('wide');
+  showScreen('landing');
+}
+document.getElementById('backToLandingFromPipeline').addEventListener('click', goHome);
+document.getElementById('wordmarkHome').addEventListener('click', function(e){ e.preventDefault(); goHome(); });
+
+/* ======================================================================
+   6. PIPELINE — stages, timeline, progress bar
+====================================================================== */
+var STAGES = [
+  {key:'parsing',   title:'Анализ шаблона',        desc:'Разбираем референс-презентацию: палитра, шрифты, макеты, стили таблиц и графиков.'},
+  {key:'planning',  title:'План выступления',      desc:'LLM готовит структуру и содержание слайдов под вашу задачу.'},
+  {key:'assembling',title:'Генерация вариантов',   desc:'Собираем три варианта вёрстки презентации по дизайн-системе шаблона.'},
+  {key:'variant',   title:'Выбор варианта',        desc:'Выберите вариант оформления, который больше нравится.'},
+  {key:'audit',     title:'Аудит качества',        desc:'Опционально: проверка выбранного варианта на переполнения, наложения и плотность.'},
+  {key:'export',    title:'Экспорт результата',    desc:'Скачайте презентацию в нужном формате.'}
+];
+var STATUS_TO_STAGE_INDEX = {
+  queued:0, parsing:0, planning:1, assembling:2,
+  awaiting_variant_choice:3, awaiting_audit_choice:4, auditing:4,
+  done:5, failed:-1
+};
+
+var timelineEl = document.getElementById('timeline');
+var progressFill = document.getElementById('progressFill');
+var progressPct = document.getElementById('progressPct');
+var progressStageLabel = document.getElementById('progressStageLabel');
+var stageContentEl = document.getElementById('stageContent');
+var dsPanel = document.getElementById('dsPanel');
+var dsPanelBody = document.getElementById('dsPanelBody');
+
+function renderTimeline(activeIdx, failed){
+  timelineEl.innerHTML = '';
+  STAGES.forEach(function(stage, idx){
+    var item = document.createElement('div');
+    var cls = 'tl-item';
+    if(failed && idx === activeIdx) cls += ' failed';
+    else if(idx < activeIdx || (idx === activeIdx && stage.key === 'export' && state.jobStatus === 'done')) cls += ' done';
+    else if(idx === activeIdx) cls += ' active';
+    item.className = cls;
+
+    var dotContent = (idx < activeIdx) ? '✓' : (idx === activeIdx && !failed ? '<div class="spinner"></div>' : (idx+1));
+    if(failed && idx === activeIdx) dotContent = '!';
+
+    item.innerHTML =
+      '<div class="tl-dot">' + dotContent + '</div>' +
+      '<div class="tl-title">' + stage.title + '</div>' +
+      '<div class="tl-desc">' + stage.desc + '</div>';
+
+    if(stage.key === 'parsing' && state.designSystem && idx <= activeIdx){
+      var trigger = document.createElement('div');
+      trigger.className = 'tl-panel-trigger';
+      trigger.textContent = '◧ Открыть дизайн-систему';
+      trigger.addEventListener('click', toggleDsPanel);
+      item.appendChild(trigger);
+    }
+    if(stage.key === 'planning' && state.contentPlan && idx <= activeIdx){
+      var planTrigger = document.createElement('div');
+      planTrigger.className = 'tl-panel-trigger';
+      var nSl = (state.contentPlan.slides || []).length;
+      planTrigger.textContent = '☰ Открыть план содержания' + (nSl ? ' · ' + nSl + ' ' + plural(nSl, ['слайд','слайда','слайдов']) : '');
+      planTrigger.addEventListener('click', togglePlanPanel);
+      item.appendChild(planTrigger);
+    }
+    timelineEl.appendChild(item);
+  });
+}
+
+function updateProgress(status){
+  var idx = STATUS_TO_STAGE_INDEX[status];
+  var failed = status === 'failed';
+  if(failed){
+    progressStageLabel.textContent = 'Ошибка на стадии генерации';
+    progressFill.style.width = '100%';
+    progressFill.style.background = 'var(--danger)';
+    renderTimeline(state.lastGoodIdx == null ? 0 : state.lastGoodIdx, true);
     return;
   }
-  try {
-    var resp = await fetch(apiBase() + '/jobs/' + jobId);
-    var data = await resp.json();
-    out.textContent = JSON.stringify(data, null, 2);
-  } catch (err) {
-    out.textContent = 'Ошибка запроса: ' + err;
+  state.lastGoodIdx = idx;
+  var pct = Math.round(((idx+1) / STAGES.length) * 100);
+  progressFill.style.width = pct + '%';
+  progressPct.textContent = pct + '%';
+  progressStageLabel.textContent = STAGES[idx] ? STAGES[idx].title : '…';
+  renderTimeline(idx, false);
+}
+
+var planPanel = document.getElementById('planPanel');
+var planPanelBody = document.getElementById('planPanelBody');
+function syncSidePanelClass(){ document.body.classList.toggle('ds-open', dsPanel.classList.contains('open') || planPanel.classList.contains('open')); }
+function toggleDsPanel(){ planPanel.classList.remove('open'); dsPanel.classList.toggle('open'); syncSidePanelClass(); }
+function closeDsPanel(){ dsPanel.classList.remove('open'); syncSidePanelClass(); }
+function togglePlanPanel(){ dsPanel.classList.remove('open'); planPanel.classList.toggle('open'); syncSidePanelClass(); }
+function closePlanPanel(){ planPanel.classList.remove('open'); syncSidePanelClass(); }
+document.getElementById('dsPanelClose').addEventListener('click', closeDsPanel);
+document.getElementById('planPanelClose').addEventListener('click', closePlanPanel);
+document.addEventListener('keydown', function(e){ if(e.key === 'Escape'){ closeDsPanel(); closePlanPanel(); } });
+
+/* Заголовок раздела панели с неактивной кнопкой-карандашом для редактирования всего блока. */
+function dsSectionTitleHtml(label, extra){
+  return '<div class="ds-section-title"><span>' + label + (extra ? ' ' + extra : '') + '</span>' +
+    '<span class="ds-edit-hint" title="Редактирование блока появится позже">✎</span></div>';
+}
+/* Неактивная кнопка "добавить новый элемент" внутри блока (цвет, шрифт, макет) — отдельная от карандаша раздела. */
+function dsAddButtonHtml(title){
+  return '<span class="ds-add-btn" title="' + escapeHtml(title) + '">+</span>';
+}
+
+/* ---------- Design system side panel rendering ---------- */
+function pluralRu(n, one, few, many){
+  var m10 = n % 10, m100 = n % 100;
+  if(m10 === 1 && m100 !== 11) return one;
+  if(m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+}
+function formatPt(v){ return (Math.round(v * 10) / 10).toString().replace(/\.0$/, '') + 'pt'; }
+var COMPOSITION_RU = {
+  single_focus: 'один фокус', title_body: 'заголовок + текст', two_columns: 'две колонки', vertical_sequence: 'вертикальный ряд',
+  horizontal_sequence: 'горизонтальный ряд', grid: 'сетка', image_text: 'фото + текст', full_bleed_image: 'фото на весь слайд',
+  metric_focus: 'фактоид', quote: 'цитата', comparison: 'сравнение', list: 'список', timeline: 'таймлайн'
+};
+function compositionRu(c){ return COMPOSITION_RU[c] || (c || '').replace(/_/g, ' '); }
+var SOURCE_GROUP_RU = { sample: 'Слайды-образцы', layout: 'Макеты', library: 'Библиотека компоновок' };
+function renderDesignSystem(ds){
+  dsPanelBody.innerHTML = '';
+
+  // Источник дизайна: откуда генератор берёт композиции и что он распознал
+  if(ds.design_source){
+    var srcSection = document.createElement('div');
+    srcSection.className = 'ds-section';
+    var info = ds.design_source_info || {};
+    srcSection.innerHTML = dsSectionTitleHtml('Откуда берётся дизайн');
+    var stats = document.createElement('div');
+    stats.className = 'ds-source';
+    stats.innerHTML =
+      '<div class="stat main"><div class="n">' + escapeHtml(info.label || ds.design_source) + '</div><div class="l">источник композиций</div></div>' +
+      (info.slides_total != null ? '<div class="stat"><div class="n">' + info.sample_slides + ' / ' + info.slides_total + '</div><div class="l">слайдов-образцов распознано</div></div>' : '') +
+      (info.layouts_total != null ? '<div class="stat"><div class="n">' + info.layouts_with_body + ' / ' + info.layouts_total + '</div><div class="l">макетов с телом слайда</div></div>' : '');
+    srcSection.appendChild(stats);
+    var comps = ds.compositions || [];
+    ['sample','layout','library'].forEach(function(src){
+      var rows = comps.filter(function(c){ return c.source === src; });
+      if(!rows.length) return;
+      var g = document.createElement('div');
+      g.className = 'ds-comp-group';
+      var total = rows.reduce(function(a,c){ return a + c.count; }, 0);
+      g.innerHTML = '<div class="g">' + SOURCE_GROUP_RU[src] + ' · ' + total + '</div><div class="chips">' +
+        rows.map(function(c){ return '<span title="' + escapeHtml((c.examples||[]).join(', ')) + '">' + escapeHtml(c.label) + (c.count > 1 ? '<b>×' + c.count + '</b>' : '') + '</span>'; }).join('') + '</div>';
+      srcSection.appendChild(g);
+    });
+    var note = document.createElement('p');
+    note.style.cssText = 'font-size:12px;color:var(--text-2);margin:12px 0 0;line-height:1.5;';
+    note.textContent = ds.design_source === 'library'
+      ? 'В шаблоне нет ни слайдов-образцов, ни макетов с телом — компоновки берутся из собственной библиотеки и раскрашиваются шрифтами и цветами шаблона.'
+      : 'Слайды-образцы клонируются и подстраиваются под число тезисов; недостающие виды (таблица, график, крупный тезис) достраиваются из библиотеки на чистом макете шаблона.';
+    srcSection.appendChild(note);
+    dsPanelBody.appendChild(srcSection);
+  }
+
+  // Colors
+  var colorSection = document.createElement('div');
+  colorSection.className = 'ds-section';
+  colorSection.innerHTML = dsSectionTitleHtml('Цвета');
+  var swatchWrap = document.createElement('div');
+  swatchWrap.className = 'ds-swatches';
+  (ds.colors || []).forEach(function(c){
+    var sw = document.createElement('div');
+    sw.className = 'ds-swatch';
+    sw.style.background = c.hex;
+    sw.setAttribute('data-label', c.label + ' — ' + c.hex);
+    swatchWrap.appendChild(sw);
+  });
+  var addColorBtn = document.createElement('span');
+  addColorBtn.className = 'ds-add-btn';
+  addColorBtn.title = 'Добавить цвет (скоро)';
+  addColorBtn.textContent = '+';
+  swatchWrap.appendChild(addColorBtn);
+  colorSection.appendChild(swatchWrap);
+  dsPanelBody.appendChild(colorSection);
+
+  // Typography — полная шкала шаблона по семантическим ролям (из Template JSON движка).
+  var fontSection = document.createElement('div');
+  fontSection.className = 'ds-section';
+  var scale = ds.typography_scale || [];
+  var theme = ds.theme_fonts || {};
+  var families = (theme.families && theme.families.length) ? theme.families : [];
+  fontSection.innerHTML = dsSectionTitleHtml('Типографика', scale.length ? '(' + scale.length + ' стил' + pluralRu(scale.length, 'ь', 'я', 'ей') + ')' : '');
+  if(families.length){
+    var famRow = document.createElement('div');
+    famRow.className = 'ds-font-row';
+    famRow.innerHTML = '<span class="role">Гарнитуры</span><span class="val">' + escapeHtml(families.join(' · ')) + '</span>';
+    fontSection.appendChild(famRow);
+  }
+  if(theme.major || theme.minor){
+    var themeRow = document.createElement('div');
+    themeRow.className = 'ds-font-row';
+    themeRow.innerHTML = '<span class="role">Тема (заголовки / текст)</span><span class="val">' + escapeHtml((theme.major || '—') + ' / ' + (theme.minor || '—')) + '</span>';
+    fontSection.appendChild(themeRow);
+  }
+  if(scale.length){
+    // Живой образец шкалы: несколько ключевых кеглей в пропорции.
+    var sample = document.createElement('div');
+    sample.className = 'ds-type-sample';
+    var sampleSizes = [];
+    scale.forEach(function(r){ (r.sizes_pt || []).forEach(function(sz){ if(sampleSizes.indexOf(sz) < 0) sampleSizes.push(sz); }); });
+    sampleSizes.sort(function(a,b){ return b - a; });
+    sampleSizes.slice(0, 5).forEach(function(sz){
+      var sp = document.createElement('span');
+      sp.style.fontSize = Math.max(9, Math.min(34, sz * 0.5)) + 'px';
+      sp.style.fontFamily = "'" + (families[0] || 'inherit') + "', inherit";
+      sp.textContent = 'Аа ' + sz + 'pt';
+      sample.appendChild(sp);
+    });
+    fontSection.appendChild(sample);
+
+    var table = document.createElement('table');
+    table.className = 'ds-type-table';
+    table.innerHTML = '<thead><tr><th>Роль текста</th><th>Кегль</th><th class="n">Макетов</th></tr></thead>';
+    var tbody = document.createElement('tbody');
+    scale.forEach(function(r){
+      var tr = document.createElement('tr');
+      var dots = (r.colors || []).slice(0, 4).map(function(c){ return '<i style="background:' + escapeHtml(c) + '"></i>'; }).join('');
+      tr.innerHTML =
+        '<td><div class="role">' + escapeHtml(r.label) + '</div><div class="fam">' + escapeHtml(r.family) + (r.bold ? ', жирный' : '') + (dots ? '<span class="ds-color-dots">' + dots + '</span>' : '') + '</div></td>' +
+        '<td class="sz">' + (r.sizes_pt || []).map(function(v){ return formatPt(v); }).join(' / ') + (r.estimated ? '<div class="est">оценка по слоту</div>' : '') + '</td>' +
+        '<td class="n" title="' + escapeHtml((r.layouts || []).join(', ')) + '">' + r.layouts_count + '</td>';
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    fontSection.appendChild(table);
+  } else {
+    (ds.fonts || []).forEach(function(f){
+      var row = document.createElement('div');
+      row.className = 'ds-font-row';
+      var fontName = f.resolved_font_label || f.raw_font;
+      row.innerHTML = '<span class="role">' + escapeHtml(f.label) + '</span><span class="val">' + escapeHtml(fontName) + ', ' + f.size_pt + 'pt' + (f.bold ? ', bold' : '') + '</span>';
+      fontSection.appendChild(row);
+    });
+  }
+  dsPanelBody.appendChild(fontSection);
+
+  // Layouts — все макеты шаблона (slideLayout) с геометрией слотов, сгруппированные по роли в нарративе.
+  var layoutSection = document.createElement('div');
+  layoutSection.className = 'ds-section';
+  var tLayouts = ds.template_layouts || [];
+  if(tLayouts.length){
+    layoutSection.innerHTML = dsSectionTitleHtml('Макеты шаблона', '(' + tLayouts.length + ')');
+    var groupsOrder = ['Обложка', 'Раздел', 'Контент', 'Финал'];
+    var groups = {};
+    tLayouts.forEach(function(l){
+      var g = l.narrative_label || 'Контент';
+      (groups[g] = groups[g] || []).push(l);
+    });
+    Object.keys(groups).forEach(function(g){ if(groupsOrder.indexOf(g) < 0) groupsOrder.push(g); });
+    groupsOrder.forEach(function(g){
+      if(!groups[g]) return;
+      var title = document.createElement('div');
+      title.className = 'ds-layout-group';
+      title.textContent = g + ' · ' + groups[g].length;
+      layoutSection.appendChild(title);
+      var grid = document.createElement('div');
+      grid.className = 'ds-layouts-grid';
+      groups[g].forEach(function(l){
+        var card = document.createElement('div');
+        card.className = 'ds-layout-card';
+        var mock = document.createElement('div');
+        mock.className = 'ds-layout-mock';
+        if(l.background_hex) mock.style.background = l.background_hex;
+        (l.elements || []).forEach(function(el){
+          var box = document.createElement('div');
+          var cls = 'mock-el';
+          if(el.kind === 'image') cls += ' is-image';
+          else if(el.kind === 'decor_image' || el.kind === 'decor' || el.role === 'decorative') cls += ' is-decor';
+          else if(/title/.test(el.role || '')) cls += ' is-title';
+          box.className = cls;
+          box.style.left = (el.left_pct || 0) + '%';
+          box.style.top = (el.top_pct || 0) + '%';
+          box.style.width = Math.max(el.width_pct || 0, 2) + '%';
+          box.style.height = Math.max(el.height_pct || 0, 3) + '%';
+          if(el.kind === 'text' && el.color && el.role !== 'decorative') box.style.background = el.color;
+          box.title = (el.role || el.kind) + (el.font_size_pt ? ' · ' + formatPt(el.font_size_pt) : '');
+          mock.appendChild(box);
+        });
+        card.appendChild(mock);
+        var nameEl = document.createElement('div');
+        nameEl.className = 'ds-layout-name';
+        nameEl.textContent = l.name;
+        nameEl.title = l.name + (l.best_for && l.best_for.length ? ' — ' + l.best_for.join(', ') : '');
+        card.appendChild(nameEl);
+        var meta = document.createElement('div');
+        meta.className = 'ds-layout-meta';
+        var bits = [];
+        if(l.composition) bits.push(compositionRu(l.composition));
+        bits.push(l.text_slots + ' текст.');
+        if(l.image_slots) bits.push(l.image_slots + ' фото');
+        meta.textContent = bits.join(' · ');
+        meta.title = meta.textContent;
+        card.appendChild(meta);
+        grid.appendChild(card);
+      });
+      layoutSection.appendChild(grid);
+    });
+  } else {
+    layoutSection.innerHTML = dsSectionTitleHtml('Макеты', '(' + (ds.layouts||[]).length + ')');
+    var layoutsGrid = document.createElement('div');
+    layoutsGrid.className = 'ds-layouts-grid';
+    (ds.layouts || []).forEach(function(l){
+      var card = document.createElement('div');
+      card.className = 'ds-layout-card';
+      var mock = document.createElement('div');
+      mock.className = 'ds-layout-mock';
+      var example = (l.examples || [])[0];
+      if(example && example.elements && example.elements.length){
+        example.elements.forEach(function(el){
+          var box = document.createElement('div');
+          box.className = 'mock-el' + (el.is_title_role ? ' is-title' : '');
+          box.style.left = (el.left_pct || 0) + '%';
+          box.style.top = (el.top_pct || 0) + '%';
+          box.style.width = Math.max(el.width_pct || 0, 3) + '%';
+          box.style.height = Math.max(el.height_pct || 0, 4) + '%';
+          if(el.fill_hex) box.style.background = '#' + el.fill_hex.replace('#','');
+          mock.appendChild(box);
+        });
+      } else {
+        mock.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text-2);font-size:10px;">нет превью</div>';
+      }
+      card.appendChild(mock);
+      var nameEl = document.createElement('div');
+      nameEl.className = 'ds-layout-name';
+      nameEl.textContent = l.name || l.category;
+      nameEl.title = l.name || l.category;
+      card.appendChild(nameEl);
+      layoutsGrid.appendChild(card);
+    });
+    layoutSection.appendChild(layoutsGrid);
+  }
+  dsPanelBody.appendChild(layoutSection);
+
+  // Table / chart style
+  var styleSection = document.createElement('div');
+  styleSection.className = 'ds-section';
+  styleSection.innerHTML =
+    dsSectionTitleHtml('Стили таблиц и графиков') +
+    '<div class="ds-font-row"><span class="role">Таблицы</span><span class="val">' + (ds.table_style && ds.table_style.found ? 'найден стиль в шаблоне' : 'по умолчанию из палитры') + '</span></div>' +
+    '<div class="ds-font-row"><span class="role">Графики</span><span class="val">' + (ds.chart_style && ds.chart_style.found ? 'найден стиль в шаблоне' : 'по умолчанию из палитры') + '</span></div>';
+  dsPanelBody.appendChild(styleSection);
+
+  // Raw JSON toggle
+  var jsonToggle = document.createElement('div');
+  jsonToggle.className = 'ds-json-toggle';
+  jsonToggle.textContent = 'Показать как JSON (манифест сборки)';
+  var jsonBlock = document.createElement('div');
+  jsonBlock.className = 'ds-json-block';
+  jsonBlock.textContent = JSON.stringify(ds.manifest, null, 2);
+  jsonToggle.addEventListener('click', function(){
+    jsonBlock.classList.toggle('open');
+    jsonToggle.textContent = jsonBlock.classList.contains('open') ? 'Скрыть JSON' : 'Показать как JSON (манифест сборки)';
+  });
+  dsPanelBody.appendChild(jsonToggle);
+  dsPanelBody.appendChild(jsonBlock);
+}
+
+/* ======================================================================
+   7. LAUNCH PIPELINE — analyze template (if provided) -> create job -> poll
+====================================================================== */
+async function launchPipeline(){
+  showScreen('pipeline');
+  stageContentEl.innerHTML = '';
+  stageContentEl.classList.remove('wide');
+  document.querySelector('.pipeline-main').classList.remove('wide');
+  dsPanel.classList.remove('open');
+  planPanel.classList.remove('open');
+  state.contentPlan = null; state.lastJob = null; state.previews = {};
+  planPanelBody.innerHTML = '';
+  syncSidePanelClass();
+  updateProgress('parsing');
+
+  var activeCase = state.cases.filter(function(c){ return c.id === state.activeCaseId; })[0];
+  var brief = promptInput.value.trim() || (activeCase ? activeCase.label : 'Презентация');
+  var bits = [];
+  if(state.params.audience) bits.push('Аудитория: ' + state.params.audience);
+  if(state.params.tone) bits.push('Тон: ' + state.params.tone);
+  var purpose = bits.length ? bits.join('. ') : 'Презентация по задаче пользователя';
+
+  var slideCount = state.params.slide_min;
+  var slideCountMax = state.params.slide_max > state.params.slide_min ? state.params.slide_max : null;
+
+  var casePromptAddition = activeCase ? activeCase.prompt_addition : '';
+
+  try{
+    if(!state.referenceFile){
+      throw new Error('Нужна презентация-ориентир, чтобы извлечь дизайн-систему (палитру, шрифты, макеты).');
+    }
+
+    // Шаг 1: анализируем шаблон отдельно от job — так у нас на руках
+    // template_analysis_id и можно сразу забрать обогащённую DesignSystem
+    // для боковой панели, не дожидаясь и не дублируя парсинг внутри job.
+    var analyzeForm = new FormData();
+    analyzeForm.append('template', state.referenceFile);
+    var analysis = await api('/templates/analyze', { method: 'POST', body: analyzeForm });
+    state.templateAnalysisId = analysis.template_analysis_id;
+
+    if(analysis.status === 'failed'){
+      throw new Error(analysis.error || 'Не удалось разобрать презентацию-шаблон.');
+    }
+
+    try{
+      state.designSystem = await api('/templates/' + analysis.template_analysis_id + '/design-system');
+      renderDesignSystem(state.designSystem);
+    }catch(dsErr){
+      console.warn('design-system fetch failed', dsErr);
+    }
+
+    // Шаг 2: создаём job уже по готовому template_analysis_id — без повторной
+    // загрузки файла.
+    var formData = new FormData();
+    formData.append('template_analysis_id', analysis.template_analysis_id);
+    formData.append('brief', brief);
+    formData.append('purpose', purpose);
+    formData.append('case_prompt_addition', casePromptAddition);
+    if(slideCount) formData.append('slide_count', String(slideCount));
+    if(slideCountMax) formData.append('slide_count_max', String(slideCountMax));
+
+    var createResp = await api('/jobs', { method:'POST', body: formData });
+    state.jobId = createResp.job_id;
+    pollJob();
+  }catch(err){
+    stageContentEl.innerHTML = '<div class="error-box">Не удалось запустить генерацию: ' + escapeHtml(err.message) + '</div>';
+    updateProgress('failed');
   }
 }
 
-document.getElementById('statusForm').addEventListener('submit', function (e) {
-  e.preventDefault();
-  checkStatus();
-});
+function pollJob(){
+  if(state.pollTimer) clearInterval(state.pollTimer);
+  state.pollTimer = setInterval(async function(){
+    try{
+      var job = await api('/jobs/' + state.jobId);
+      state.jobStatus = job.status;
+      updateProgress(job.status);
 
-document.getElementById('pollButton').addEventListener('click', function () {
-  if (pollTimer) clearInterval(pollTimer);
-  checkStatus();
-  pollTimer = setInterval(checkStatus, 2000);
-});
-
-document.getElementById('stopPollButton').addEventListener('click', function () {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-});
-
-// --- 3. Догрузка данных в слайд ---
-document.getElementById('addDataForm').addEventListener('submit', async function (e) {
-  e.preventDefault();
-  var out = document.getElementById('addDataResult');
-  var jobId = document.getElementById('addDataJobId').value.trim();
-  var slideId = document.getElementById('addDataSlideId').value.trim();
-  var mode = document.querySelector('input[name="addDataMode"]:checked').value;
-
-  if (!jobId || !slideId) {
-    out.textContent = 'Укажите Job ID и Slide ID';
-    return;
-  }
-
-  out.textContent = 'Отправка...';
-
-  try {
-    var resp, data;
-    if (mode === 'json') {
-      var blockText = document.getElementById('addContentBlockJson').value;
-      var blockObj;
-      try {
-        blockObj = JSON.parse(blockText);
-      } catch (parseErr) {
-        out.textContent = 'Невалидный JSON: ' + parseErr;
-        return;
+      if(job.design_manifest && !state.designSystem){
+        // Резервный путь: если /templates/analyze почему-то не сработал раньше
+        // (например, обновили страницу после старта job), собираем минимальную
+        // панель прямо из манифеста задачи — без ролей/группировки, но не пустую.
+        state.designSystem = {
+          manifest: job.design_manifest,
+          colors: [], fonts: [], layouts: [],
+          table_style: { found: false }, chart_style: { found: false }
+        };
+        renderDesignSystem(state.designSystem);
       }
-      resp = await fetch(
-        apiBase() + '/jobs/' + jobId + '/slides/' + slideId + '/content-block',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ block: blockObj })
-        }
-      );
-    } else {
-      var excelFile = document.getElementById('addExcelFile').files[0];
-      if (!excelFile) {
-        out.textContent = 'Выберите файл Excel';
-        return;
+
+      if(job.content_plan && (!state.contentPlan || state.contentPlanJobId !== job.job_id)){
+        state.contentPlan = job.content_plan;
+        state.contentPlanJobId = job.job_id;
+        renderContentPlan(job);
+        updateProgress(job.status); // появилась кнопка «план содержания» на таймлайне
       }
-      var formData = new FormData();
-      formData.append('file', excelFile);
-      var sheetName = document.getElementById('addExcelSheetName').value;
-      var kind = document.getElementById('addExcelKind').value;
-      if (sheetName) formData.append('sheet_name', sheetName);
-      if (kind) formData.append('kind', kind);
 
-      resp = await fetch(
-        apiBase() + '/jobs/' + jobId + '/slides/' + slideId + '/import-excel',
-        { method: 'POST', body: formData }
-      );
+      if(job.status === 'awaiting_variant_choice'){
+        clearInterval(state.pollTimer);
+        state.lastJob = job;
+        renderContentPlan(job); // теперь известны композиции A/B/C по слайдам
+        renderVariantChoice(job);
+      } else if(job.status === 'awaiting_audit_choice'){
+        clearInterval(state.pollTimer);
+        state.selectedVariant = job.selected_variant;
+        renderAuditChoice(job);
+      } else if(job.status === 'done'){
+        clearInterval(state.pollTimer);
+        state.selectedVariant = job.selected_variant;
+        state.auditIssues = job.audit_issues;
+        renderExportScreen(job);
+      } else if(job.status === 'failed'){
+        clearInterval(state.pollTimer);
+        stageContentEl.innerHTML = '<div class="error-box">Пайплайн остановился с ошибкой: ' + escapeHtml(job.error || 'неизвестная ошибка') + '</div>';
+      }
+    }catch(err){
+      // сетевой сбой при опросе — не останавливаем поллинг, просто пробуем ещё раз
+      console.warn('poll error', err);
     }
-    data = await resp.json();
-    out.textContent = JSON.stringify(data, null, 2);
-    if (resp.ok) {
-      out.textContent += '\n\nНе забудьте вызвать "Пересобрать" ниже, чтобы применить изменения к .pptx.';
-    }
-  } catch (err) {
-    out.textContent = 'Ошибка запроса: ' + err;
-  }
-});
+  }, 1800);
+}
 
-// --- Пересборка (fix) ---
-document.getElementById('fixForm').addEventListener('submit', async function (e) {
-  e.preventDefault();
-  var out = document.getElementById('fixResult');
-  var jobId = document.getElementById('fixJobId').value.trim();
-  if (!jobId) {
-    out.textContent = 'Укажите Job ID';
-    return;
+/* ======================================================================
+   8. VARIANT CHOICE SCREEN
+====================================================================== */
+var VARIANT_LABELS = { variant_a: 'Вариант A', variant_b: 'Вариант B', variant_c: 'Вариант C' };
+var VARIANT_SHORT = { variant_a: 'A', variant_b: 'B', variant_c: 'C' };
+// Запасные подписи оси различия — бэкенд присылает актуальные в job.variant_descriptions.
+var VARIANT_AXIS_FALLBACK = {
+  variant_a: { label: 'Лаконичный', description: 'Заголовки тезисов и короткие подписи, много воздуха' },
+  variant_b: { label: 'Сбалансированный', description: 'Заголовок и короткое пояснение к каждому тезису' },
+  variant_c: { label: 'Насыщенный', description: 'Развёрнутые пояснения, заметки-выводы, фото' }
+};
+var KIND_RU = {
+  cover:'обложка', agenda:'оглавление', section:'разделитель', cards:'карточки', team:'команда', diagram:'схема',
+  gallery:'галерея', timeline:'таймлайн', metrics:'метрики', table:'таблица', chart:'график', statement:'тезис',
+  text:'текст', image_text:'фото и текст', closing:'финал', qa:'вопросы', cta:'призыв', problems:'проблемы',
+  columns:'колонки', title_only:'заголовок', speaker:'спикер', list:'список', quote:'цитата', comparison:'сравнение'
+};
+var KIND_PLURAL = {
+  cards:['карточки','карточки','карточки'], section:['разделитель','разделителя','разделителей'], statement:['тезис','тезиса','тезисов'],
+  timeline:['таймлайн','таймлайна','таймлайнов'], metrics:['метрики','метрики','метрики'], table:['таблица','таблицы','таблиц'],
+  chart:['график','графика','графиков'], image_text:['фото и текст','фото и текст','фото и текст'], text:['текст','текста','текстов'],
+  problems:['проблемы','проблемы','проблемы'], columns:['колонки','колонки','колонки'], gallery:['галерея','галереи','галерей']
+};
+function kindRu(k){ return KIND_RU[k] || (k || '').replace(/_/g,' '); }
+/* Варианты без разделителей короче плана содержания: variant_sources[v][i] — индекс слайда плана
+   для i-го слайда варианта. Обратная карта: индекс плана → индекс слайда варианта (или -1). */
+function sourceMap(job, key){
+  var src = (job.variant_sources || {})[key];
+  var n = ((job.variant_kinds || {})[key] || (job.variant_plans || {})[key] || []).length;
+  var map = {};
+  if(src && src.length){ src.forEach(function(planIdx, i){ map[planIdx] = i; }); }
+  else { for(var i = 0; i < n; i++) map[i] = i; }
+  return map;
+}
+function planLength(job){
+  var n = ((job.content_plan || {}).slides || []).length;
+  Object.keys(job.variant_sources || {}).forEach(function(k){ (job.variant_sources[k] || []).forEach(function(p){ n = Math.max(n, p + 1); }); });
+  if(!n) Object.keys(job.variant_kinds || {}).forEach(function(k){ n = Math.max(n, (job.variant_kinds[k] || []).length); });
+  return n;
+}
+function hasSections(job, key){ return ((job.variant_kinds || {})[key] || []).indexOf('section') >= 0; }
+
+/* Чем варианты отличаются на самом деле — считаем по планам (variant_plans: id композиции
+   по слайдам, variant_kinds: вид композиции по слайдам), а не пишем заранее. */
+function variantChips(job, key){
+  var kinds = (job.variant_kinds && job.variant_kinds[key]) || [];
+  var counts = {};
+  kinds.forEach(function(k){ if(k && k !== 'cover' && k !== 'closing' && k !== 'title_only') counts[k] = (counts[k] || 0) + 1; });
+  var chips = Object.keys(counts).sort(function(x,y){ return counts[y] - counts[x]; }).slice(0, 5).map(function(k){
+    var n = counts[k], forms = KIND_PLURAL[k];
+    return forms ? (n > 1 ? n + ' ' + plural(n, forms) : forms[0]) : kindRu(k) + (n > 1 ? ' ×' + n : '');
+  });
+  var plans = job.variant_plans || {};
+  var mine = plans[key] || [];
+  var others = Object.keys(plans).filter(function(k){ return k !== key; });
+  var myMap = sourceMap(job, key);
+  var otherMaps = {}; others.forEach(function(o){ otherMaps[o] = sourceMap(job, o); });
+  var diff = 0;
+  Object.keys(myMap).forEach(function(planIdx){
+    var id = mine[myMap[planIdx]];
+    if(others.length && others.every(function(o){ var j = otherMaps[o][planIdx]; return j === undefined || (plans[o] || [])[j] !== id; })) diff++;
+  });
+  var anySections = Object.keys(job.variant_kinds || {}).some(function(k){ return hasSections(job, k); });
+  var lengthChip = mine.length + ' ' + plural(mine.length, ['слайд','слайда','слайдов']) + (anySections ? (hasSections(job, key) ? ' · с разделителями' : ' · без разделителей') : '');
+  return { chips: chips, diff: diff, total: mine.length, lengthChip: lengthChip };
+}
+
+function renderVariantChoice(job){
+  stageContentEl.classList.add('wide');
+  document.querySelector('.pipeline-main').classList.add('wide');
+  var variantKeys = Object.keys(job.variant_paths || {});
+  var slideCount = planLength(job);
+  var maps = {}; variantKeys.forEach(function(k){ maps[k] = sourceMap(job, k); });
+
+  var html = '<div class="variant-section">' +
+    '<div class="variant-head"><div>' +
+    '<h3 style="margin:0 0 6px;font-size:18px;">Выберите вариант оформления</h3>' +
+    '<p style="color:var(--text-2);font-size:14px;margin:0;max-width:820px;">Три презентации по&nbsp;одному плану содержания. Отличаются плотностью подачи и&nbsp;характером композиций&nbsp;— под названием каждого варианта перечислено, из&nbsp;чего он собран и&nbsp;на&nbsp;скольких слайдах не&nbsp;совпадает с&nbsp;другими. Кликните на&nbsp;понравившийся.</p>' +
+    '</div><div class="seg" id="variantModeSeg"><button type="button" data-mode="columns" class="on">Колонки</button><button type="button" data-mode="compare">Слайд за слайдом</button></div></div>' +
+    '<div class="variant-carousel" id="variantCarousel"></div>' +
+    '<div class="compare" id="variantCompare"></div>' +
+    '<div id="variantChoiceError"></div>' +
+    '<div style="display:flex;justify-content:flex-end;margin-top:8px;">' +
+    '<button class="btn primary" id="confirmVariantBtn" disabled>Выбрать и продолжить →</button>' +
+    '</div></div>';
+  stageContentEl.innerHTML = html;
+
+  var carousel = document.getElementById('variantCarousel');
+  var compareEl = document.getElementById('variantCompare');
+  var chosen = null;
+  var slideColumns = [];
+  var previewQueue = Promise.resolve(); // превью грузим по очереди: LibreOffice на сервере один
+  state.previews = state.previews || {};
+
+  function choose(key){
+    chosen = key;
+    carousel.querySelectorAll('.variant-card').forEach(function(c){ c.classList.toggle('selected', c.getAttribute('data-variant') === key); });
+    compareEl.querySelectorAll('.compare-card').forEach(function(c){ c.classList.toggle('selected', c.getAttribute('data-variant') === key); });
+    document.getElementById('confirmVariantBtn').disabled = false;
   }
-  out.textContent = 'Отправка...';
-  try {
-    var resp = await fetch(apiBase() + '/jobs/' + jobId + '/fix', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ issue_ids: [] })
+
+  variantKeys.forEach(function(key){
+    var axis = (job.variant_descriptions && job.variant_descriptions[key]) || VARIANT_AXIS_FALLBACK[key] || { label: '', description: '' };
+    var vc = variantChips(job, key);
+    var card = document.createElement('div');
+    card.className = 'variant-card';
+    card.setAttribute('data-variant', key);
+    card.innerHTML =
+      '<div class="variant-info"><div><span class="name">' + (VARIANT_LABELS[key] || key) + (axis.label ? ' · ' + escapeHtml(axis.label) : '') + '</span>' +
+      (axis.description ? '<div class="axis">' + escapeHtml(axis.description) + '</div>' : '') +
+      '<div class="chips">' + (vc.total ? '<span class="diff">' + escapeHtml(vc.lengthChip) + '</span>' : '') + vc.chips.map(function(c){ return '<span>' + escapeHtml(c) + '</span>'; }).join('') +
+      (vc.total ? '<span class="diff" title="Слайды, где композиция не совпадает ни с одним другим вариантом">не как у других: ' + vc.diff + ' из ' + vc.total + '</span>' : '') + '</div>' +
+      '</div><div class="variant-check">✓</div></div>' +
+      '<div class="variant-slides" id="variantSlides_' + key + '"><div class="variant-thumb-placeholder">Загружаем предпросмотр…</div></div>' +
+      '<a class="variant-download" href="' + apiBase() + '/jobs/' + job.job_id + '/export?format=pptx&variant=' + key + '" target="_blank" rel="noopener">Скачать .pptx этого варианта</a>';
+    card.addEventListener('click', function(e){
+      if(e.target && e.target.closest('.variant-download')) return;
+      choose(key);
     });
-    var data = await resp.json();
-    out.textContent = JSON.stringify(data, null, 2) + '\n\nПроверьте статус в разделе 2 — пересборка идёт в фоне.';
-  } catch (err) {
-    out.textContent = 'Ошибка запроса: ' + err;
-  }
-});
+    carousel.appendChild(card);
 
-// --- 4. Просмотр листов Excel ---
-document.getElementById('sheetsForm').addEventListener('submit', async function (e) {
-  e.preventDefault();
-  var out = document.getElementById('sheetsResult');
-  var file = document.getElementById('sheetsFile').files[0];
-  if (!file) {
-    out.textContent = 'Выберите файл Excel';
+    var slidesWrap = card.querySelector('.variant-slides');
+    slideColumns.push(slidesWrap);
+    previewQueue = previewQueue.then(function(){ return api('/jobs/' + job.job_id + '/variants/' + key + '/preview'); }).then(function(previewInfo){
+      state.previews[key] = previewInfo.slides || [];
+      slidesWrap.innerHTML = '';
+      (previewInfo.slides || []).forEach(function(slidePath, idx){
+        var img = document.createElement('img');
+        img.className = 'variant-slide-thumb';
+        img.loading = 'lazy';
+        img.alt = (VARIANT_LABELS[key] || key) + ' — слайд ' + (idx + 1);
+        img.src = apiBase() + slidePath;
+        slidesWrap.appendChild(img);
+      });
+      if(!previewInfo.slides || !previewInfo.slides.length){
+        slidesWrap.innerHTML = '<div class="variant-thumb-placeholder">Нет слайдов для предпросмотра</div>';
+      }
+      renderCompare();
+    });
+    previewQueue = previewQueue.catch(function(err){
+      slidesWrap.innerHTML = '<div class="variant-thumb-placeholder error">Не удалось загрузить предпросмотр: ' + escapeHtml(err.message) + '</div>';
+    });
+  });
+
+  // Синхронная вертикальная прокрутка колонок
+  var syncingScroll = false;
+  slideColumns.forEach(function(col){
+    col.addEventListener('scroll', function(){
+      if(syncingScroll) return;
+      syncingScroll = true;
+      slideColumns.forEach(function(other){ if(other !== col) other.scrollTop = col.scrollTop; });
+      syncingScroll = false;
+    });
+  });
+
+  // Режим «слайд за слайдом»: один и тот же слайд в трёх вариантах рядом
+  var compareIdx = 0;
+  function renderCompare(){
+    var total = slideCount || Math.max.apply(null, variantKeys.map(function(k){ return (state.previews[k] || []).length; }).concat([0]));
+    var planSlide = ((job.content_plan || {}).slides || [])[compareIdx] || {};
+    if(!total){ compareEl.innerHTML = '<p class="plan-empty">Превью ещё готовятся…</p>'; return; }
+    compareIdx = Math.max(0, Math.min(compareIdx, total - 1));
+    var dots = '';
+    for(var i = 0; i < total; i++) dots += '<i class="' + (i === compareIdx ? 'on' : '') + '" data-i="' + i + '" title="Слайд ' + (i+1) + '"></i>';
+    var cards = variantKeys.map(function(key){
+      var axis = (job.variant_descriptions && job.variant_descriptions[key]) || VARIANT_AXIS_FALLBACK[key] || {};
+      var kinds = (job.variant_kinds || {})[key] || [];
+      var vi = maps[key][compareIdx];
+      var missing = vi === undefined;
+      var comp = missing ? '' : (((job.variant_plans || {})[key] || [])[vi] || '');
+      var src = missing ? null : (state.previews[key] || [])[vi];
+      var img = missing ? '<div class="variant-thumb-placeholder" style="aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;">В этом варианте разделителя нет — колода короче</div>'
+                : (src ? '<img src="' + apiBase() + src + '" alt="' + (VARIANT_LABELS[key]||key) + ' — слайд ' + (vi+1) + '">'
+                       : '<div class="variant-thumb-placeholder">Загружаем…</div>');
+      return '<div class="compare-card' + (chosen === key ? ' selected' : '') + (missing ? ' missing' : '') + '" data-variant="' + key + '">' +
+        '<div class="cap"><b>' + (VARIANT_LABELS[key]||key) + (axis.label ? ' · ' + escapeHtml(axis.label) : '') + '</b><span>' + (missing ? '—' : escapeHtml(kindRu(kinds[vi])) + ' · слайд ' + (vi + 1)) + '</span></div>' +
+        img + '<div class="kind" title="' + escapeHtml(comp) + '">' + escapeHtml(comp || '') + '</div></div>';
+    }).join('');
+    compareEl.innerHTML =
+      '<div class="compare-nav"><button type="button" id="cmpPrev"' + (compareIdx === 0 ? ' disabled' : '') + '>‹</button>' +
+      '<span>Слайд плана <b>' + (compareIdx + 1) + '</b> из ' + total + (planSlide.title ? ' · ' + escapeHtml(planSlide.title) : '') + '</span><div class="strip">' + dots + '</div>' +
+      '<button type="button" id="cmpNext"' + (compareIdx >= total - 1 ? ' disabled' : '') + '>›</button></div>' +
+      '<div class="compare-grid">' + cards + '</div>' +
+      '<p style="font-size:12px;color:var(--text-2);margin:10px 0 0;">Стрелки ← → на клавиатуре листают слайды; клик по карточке выбирает вариант.</p>';
+    document.getElementById('cmpPrev').addEventListener('click', function(){ compareIdx--; renderCompare(); });
+    document.getElementById('cmpNext').addEventListener('click', function(){ compareIdx++; renderCompare(); });
+    compareEl.querySelectorAll('.strip i').forEach(function(d){ d.addEventListener('click', function(){ compareIdx = parseInt(d.getAttribute('data-i'), 10); renderCompare(); }); });
+    compareEl.querySelectorAll('.compare-card').forEach(function(c){ c.addEventListener('click', function(){ choose(c.getAttribute('data-variant')); }); });
+  }
+  function onCompareKeys(e){
+    if(!compareEl.classList.contains('on')) return;
+    if(e.key === 'ArrowLeft' && compareIdx > 0){ compareIdx--; renderCompare(); }
+    if(e.key === 'ArrowRight'){ compareIdx++; renderCompare(); }
+  }
+  if(state.compareKeyHandler) document.removeEventListener('keydown', state.compareKeyHandler);
+  state.compareKeyHandler = onCompareKeys;
+  document.addEventListener('keydown', onCompareKeys);
+
+  document.querySelectorAll('#variantModeSeg button').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      document.querySelectorAll('#variantModeSeg button').forEach(function(b){ b.classList.toggle('on', b === btn); });
+      var compare = btn.getAttribute('data-mode') === 'compare';
+      carousel.style.display = compare ? 'none' : '';
+      compareEl.classList.toggle('on', compare);
+      if(compare) renderCompare();
+    });
+  });
+
+  document.getElementById('confirmVariantBtn').addEventListener('click', async function(){
+    if(!chosen) return;
+    var btn = this;
+    btn.disabled = true; btn.textContent = 'Сохраняем выбор…';
+    try{
+      var resp = await api('/jobs/' + job.job_id + '/select-variant', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({variant: chosen})
+      });
+      state.selectedVariant = chosen;
+      updateProgress(resp.status);
+      var fresh = await api('/jobs/' + job.job_id);
+      renderAuditChoice(fresh);
+    }catch(err){
+      btn.disabled = false; btn.textContent = 'Выбрать и продолжить →';
+      document.getElementById('variantChoiceError').innerHTML = '<div class="error-box">Не удалось сохранить выбор: ' + escapeHtml(err.message) + '</div>';
+    }
+  });
+}
+
+/* ======================================================================
+   8b. CONTENT PLAN PANEL — план содержания (ContentPlan) + композиции A/B/C
+====================================================================== */
+var PURPOSE_RU = { 'обложка':'обложка', 'титул':'обложка', 'раздел':'раздел', 'финал':'финал', 'заключение':'финал' };
+function renderContentPlan(job){
+  var plan = job.content_plan || state.contentPlan;
+  if(!plan) return;
+  planPanelBody.innerHTML = '';
+  var meta = document.createElement('div');
+  meta.className = 'plan-meta';
+  meta.innerHTML =
+    '<div class="box"><div class="k">О чём презентация</div><div class="v">' + escapeHtml(plan.brief || '—') + '</div></div>' +
+    '<div class="box"><div class="k">Цель</div><div class="v">' + escapeHtml(plan.purpose || '—') + '</div></div>';
+  planPanelBody.appendChild(meta);
+
+  var kindsByVariant = job.variant_kinds || {};
+  var plansByVariant = job.variant_plans || {};
+  var variantKeys = Object.keys(kindsByVariant);
+  var maps = {}; variantKeys.forEach(function(k){ maps[k] = sourceMap(job, k); });
+  var list = document.createElement('div');
+  list.className = 'plan-list';
+  (plan.slides || []).forEach(function(sl, i){
+    var row = document.createElement('div');
+    row.className = 'plan-row';
+    var blocks = sl.content_blocks || [];
+    var body = '';
+    blocks.forEach(function(b){
+      if(b.type === 'bullets' && b.bullets){
+        var shown = b.bullets.slice(0, 4);
+        body += '<ul>' + shown.map(function(t){ return '<li>' + escapeHtml(t) + '</li>'; }).join('') + '</ul>';
+        if(b.bullets.length > 4) body += '<div class="more">и ещё ' + (b.bullets.length - 4) + ' ' + plural(b.bullets.length - 4, ['тезис','тезиса','тезисов']) + '</div>';
+      } else if(b.type === 'text' && b.text){
+        body += '<p class="txt">' + escapeHtml(b.text.length > 220 ? b.text.slice(0, 220).replace(/\s+\S*$/, '') + '…' : b.text) + '</p>';
+      }
+    });
+    var data = blocks.filter(function(b){ return b.type === 'chart' || b.type === 'table'; }).map(function(b){
+      if(b.type === 'chart' && b.chart){
+        var ct = { bar: 'столбцы', line: 'линия', pie: 'круг' }[b.chart.chart_type] || b.chart.chart_type;
+        return '<span>график · ' + ct + ' · ' + (b.chart.series || []).length + ' ' + plural((b.chart.series||[]).length, ['серия','серии','серий']) + ' × ' + (b.chart.categories || []).length + '</span>';
+      }
+      if(b.type === 'table' && b.table) return '<span>таблица · ' + (b.table.rows || []).length + ' × ' + (b.table.headers || []).length + '</span>';
+      return '';
+    }).join('');
+    var kinds = '';
+    if(variantKeys.length){
+      var ids = variantKeys.map(function(k){ var vi = maps[k][i]; return vi === undefined ? null : (plansByVariant[k] || [])[vi]; });
+      var allSame = ids.every(function(id){ return id === ids[0]; });
+      kinds = '<div class="kinds">' + variantKeys.map(function(k){
+        var vi = maps[k][i];
+        if(vi === undefined) return '<span class="same"><b>' + VARIANT_SHORT[k] + '</b>без разделителя</span>';
+        var kd = (kindsByVariant[k] || [])[vi];
+        var cid = (plansByVariant[k] || [])[vi] || '';
+        var units = cid.match(/(\d+)\s+блок/);
+        var extra = units ? ' · ' + units[1] + ' ' + plural(parseInt(units[1], 10), ['блок','блока','блоков']) : (/фото/.test(cid) ? ' · фото' : '');
+        return '<span class="' + (allSame ? 'same' : '') + '" title="' + escapeHtml(cid) + '"><b>' + VARIANT_SHORT[k] + '</b>' + escapeHtml(kindRu(kd) + extra) + '</span>';
+      }).join('') + (allSame ? '<span class="same">у всех вариантов одинаково</span>' : '') + '</div>';
+    }
+    row.innerHTML = '<div class="pn">' + (i + 1) + '</div><div>' +
+      '<div class="ttl">' + escapeHtml(sl.title || '') + (sl.purpose ? '<span class="purpose">' + escapeHtml(sl.purpose) + '</span>' : '') + '</div>' +
+      body + (data ? '<div class="data">' + data + '</div>' : '') + kinds + '</div>';
+    list.appendChild(row);
+  });
+  planPanelBody.appendChild(list);
+  if(!variantKeys.length){
+    var hint = document.createElement('p');
+    hint.className = 'plan-empty';
+    hint.style.marginTop = '14px';
+    hint.textContent = 'Когда варианты соберутся, под каждым слайдом появится, какую композицию выбрал каждый из трёх вариантов.';
+    planPanelBody.appendChild(hint);
+  }
+}
+
+/* ======================================================================
+   9. AUDIT CHOICE SCREEN
+====================================================================== */
+function renderAuditChoice(job){
+  updateProgress(job.status);
+  var html = '<div class="variant-section">' +
+    '<h3 style="margin:0 0 6px;font-size:18px;">Выбран ' + (VARIANT_LABELS[state.selectedVariant] || state.selectedVariant) + '</h3>' +
+    '<p style="color:var(--text-2);font-size:14px;margin:0 0 4px;">Провести автоматический аудит качества (переполнения, наложения, плотность текста) или сразу перейти к экспорту?</p>' +
+    '<div class="audit-choice-cards">' +
+    '<div class="audit-choice-card" id="runAuditCard"><div class="icon">🔍</div><h4>Провести аудит</h4><p>Найдём возможные проблемы вёрстки и подсветим, что стоит поправить перед экспортом.</p></div>' +
+    '<div class="audit-choice-card" id="skipAuditCard"><div class="icon">⏭</div><h4>Пропустить аудит</h4><p>Сразу перейти к выбору формата экспорта без дополнительной проверки.</p></div>' +
+    '</div><div id="auditRunningStatus"></div></div>';
+  stageContentEl.innerHTML = html;
+
+  var auditStarted = false;
+  document.getElementById('runAuditCard').addEventListener('click', async function(){
+    if(auditStarted) return;
+    auditStarted = true;
+    var card = this;
+    card.classList.add('running');
+    card.querySelector('h4').textContent = 'Аудит выполняется';
+    card.querySelector('p').textContent = 'Проверяем выбранный вариант: переполнения, наложения, плотность, соответствие шаблону. Обычно 30–60 секунд. Кнопка «Пропустить аудит» остаётся доступной.';
+    var progress = document.createElement('div');
+    progress.className = 'progress';
+    progress.innerHTML = '<div class="spinner"></div><span>Выполняется аудит выбранного варианта…</span>';
+    card.appendChild(progress);
+    try{
+      await api('/jobs/' + job.job_id + '/audit', { method:'POST' });
+      pollUntilDone(job.job_id);
+    }catch(err){
+      auditStarted = false;
+      card.classList.remove('running');
+      card.querySelector('h4').textContent = 'Провести аудит';
+      card.querySelector('p').textContent = 'Найдём возможные проблемы вёрстки и подсветим, что стоит поправить перед экспортом.';
+      progress.remove();
+      document.getElementById('auditRunningStatus').innerHTML = '<div class="error-box">Не удалось запустить аудит: ' + escapeHtml(err.message) + '</div>';
+    }
+  });
+
+  document.getElementById('skipAuditCard').addEventListener('click', async function(){
+    document.getElementById('auditRunningStatus').innerHTML = '<div class="status-line">Пропускаем аудит…</div>';
+    try{
+      var resp = await api('/jobs/' + job.job_id + '/skip-audit', { method:'POST' });
+      updateProgress(resp.status);
+      var fresh = await api('/jobs/' + job.job_id);
+      renderExportScreen(fresh);
+    }catch(err){
+      document.getElementById('auditRunningStatus').innerHTML = '<div class="error-box">Не удалось пропустить аудит: ' + escapeHtml(err.message) + '</div>';
+    }
+  });
+}
+
+function pollUntilDone(jobId){
+  var timer = setInterval(async function(){
+    try{
+      var job = await api('/jobs/' + jobId);
+      updateProgress(job.status);
+      if(job.status === 'done'){
+        clearInterval(timer);
+        state.auditIssues = job.audit_issues;
+        renderExportScreen(job);
+      } else if(job.status === 'failed'){
+        clearInterval(timer);
+        stageContentEl.innerHTML = '<div class="error-box">Аудит завершился с ошибкой: ' + escapeHtml(job.error || '') + '</div>';
+      }
+    }catch(e){ console.warn(e); }
+  }, 1500);
+}
+
+/* ======================================================================
+   10. EXPORT SCREEN (with audit results, if any)
+====================================================================== */
+var CATEGORY_LABELS = { layout:'Вёрстка', template:'Шаблон', density:'Плотность', integrity:'Целостность', content:'Контент' };
+
+function renderExportScreen(job){
+  updateProgress('done');
+  var variant = state.selectedVariant || job.selected_variant || Object.keys(job.variant_paths||{})[0];
+
+  state.lastJob = job;
+  var html =
+    '<div class="variant-section" id="auditSection">' +
+    '<h3 style="margin:0 0 6px;font-size:18px;">Результаты аудита — ' + (VARIANT_LABELS[variant]||variant) + '</h3>' +
+    '<div id="auditStale"></div>' +
+    '<div id="auditBody"><p style="color:var(--text-2);font-size:13px;">Загружаем карту аудита…</p></div>' +
+    '</div>' +
+    '<div class="variant-section" id="refineSection">' +
+    '<h3 style="margin:0 0 6px;font-size:18px;">Доработка слайдов</h3>' +
+    '<p style="color:var(--text-2);font-size:14px;margin:0 0 4px;max-width:900px;">Не нравится отдельный слайд&nbsp;— не&nbsp;нужно пересобирать всё. Под каждым слайдом: <b>другая компоновка</b> из&nbsp;шаблона под тот&nbsp;же контент, <b>переписать текст</b> (модель сформулирует иначе) или <b>взять слайд</b> из&nbsp;другого варианта. Вариант пересобирается за&nbsp;10–40&nbsp;с; экспорт всегда отдаёт актуальную версию.</p>' +
+    '<div class="refine-grid" id="refineGrid"></div>' +
+    '</div>' +
+    '<div class="variant-section">' +
+    '<h3 style="margin:0 0 6px;font-size:18px;">Экспорт результата</h3>' +
+    '<p style="color:var(--text-2);font-size:14px;margin:0 0 4px;">Выберите формат — скачивание начнётся сразу.</p>' +
+    '<div class="export-grid">' +
+    '<div class="export-card" data-format="pptx"><div class="ext">.PPTX</div><div class="label">Редактируемая презентация PowerPoint</div></div>' +
+    '<div class="export-card" data-format="pdf"><div class="ext">.PDF</div><div class="label">Готовый к показу и печати документ</div></div>' +
+    '<div class="export-card" data-format="html"><div class="ext">.HTML</div><div class="label">Веб-версия для быстрого просмотра</div></div>' +
+    '</div></div>';
+  stageContentEl.innerHTML = html;
+
+  document.querySelectorAll('.export-card').forEach(function(card){
+    card.addEventListener('click', function(){
+      var format = card.getAttribute('data-format');
+      card.classList.add('downloading');
+      var url = apiBase() + '/jobs/' + job.job_id + '/export?format=' + format + '&variant=' + variant;
+      var a = document.createElement('a');
+      a.href = url; a.download = '';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function(){ card.classList.remove('downloading'); }, 1200);
+    });
+  });
+
+  renderRefineGrid(job, variant);
+  renderAuditStale(job, variant);
+
+  var body = document.getElementById('auditBody');
+  if(job.audit_skipped){
+    body.innerHTML = '<p style="color:var(--text-2);font-size:13px;">Аудит был пропущен по&nbsp;вашему выбору. ' +
+      '<a href="#" id="runAuditLate" style="color:var(--accent);">Провести аудит сейчас</a></p>';
+    var late = document.getElementById('runAuditLate');
+    if(late) late.addEventListener('click', function(e){ e.preventDefault(); startReaudit(job.job_id); });
     return;
   }
-  out.textContent = 'Отправка...';
-  var formData = new FormData();
-  formData.append('file', file);
-  try {
-    var resp = await fetch(apiBase() + '/excel/sheets', { method: 'POST', body: formData });
-    var data = await resp.json();
-    out.textContent = JSON.stringify(data, null, 2);
-  } catch (err) {
-    out.textContent = 'Ошибка запроса: ' + err;
-  }
-});
+  loadAuditMap(job.job_id, variant);
+}
 
-// --- 5. Экспорт результата ---
-document.getElementById('exportForm').addEventListener('submit', function (e) {
-  e.preventDefault();
-  var jobId = document.getElementById('exportJobId').value.trim();
-  var format = document.getElementById('exportFormat').value;
-  var variant = document.getElementById('exportVariant').value;
-  if (!jobId) {
-    alert('Укажите Job ID');
+/* --- аудит устарел после доработки слайдов --- */
+function renderAuditStale(job, variant){
+  var box = document.getElementById('auditStale');
+  if(!box) return;
+  if(!job.audit_stale){ box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="audit-stale"><span>Слайды дорабатывались после аудита&nbsp;— замечания ниже могут не&nbsp;соответствовать текущей версии.</span>' +
+    '<button class="btn small primary" id="reauditBtn">Повторить аудит</button></div>';
+  document.getElementById('reauditBtn').addEventListener('click', function(){ startReaudit(job.job_id); });
+}
+async function startReaudit(jobId){
+  var box = document.getElementById('auditStale');
+  if(box) box.innerHTML = '<div class="status-line"><div class="spinner" style="display:inline-block;vertical-align:middle;margin-right:8px;"></div>Выполняется аудит…</div>';
+  try{
+    await api('/jobs/' + jobId + '/audit', { method:'POST' });
+    auditState.stamp = Date.now();
+    pollUntilDone(jobId);
+  }catch(e){ showToast('Не удалось запустить аудит: ' + e.message, true); }
+}
+
+/* --- доработка слайдов выбранного варианта --- */
+var refineState = { busy: false };
+function renderRefineGrid(job, variant){
+  var grid = document.getElementById('refineGrid');
+  if(!grid) return;
+  var kinds = (job.variant_kinds || {})[variant] || [];
+  var ids = (job.variant_plans || {})[variant] || [];
+  var n = Math.max(kinds.length, ids.length);
+  var others = Object.keys(job.variant_paths || {}).filter(function(k){ return k !== variant; });
+  var mySrc = (job.variant_sources || {})[variant] || [];
+  var otherMaps = {}; others.forEach(function(o){ otherMaps[o] = sourceMap(job, o); });
+  if(!n || !job.variant_kinds || !job.variant_kinds[variant]){
+    grid.innerHTML = '<p class="plan-empty">Для этой задачи доработка по слайдам недоступна (вариант собран без плана драматургии).</p>';
     return;
   }
-  window.open(apiBase() + '/jobs/' + jobId + '/export?format=' + format + '&variant=' + variant, '_blank');
-});
+  var cards = '';
+  for(var i = 0; i < n; i++){
+    var imgUrl = apiBase() + '/jobs/' + job.job_id + '/variants/' + variant + '/preview/' + (i + 1) + '?v=' + auditState.stamp;
+    cards += '<div class="refine-card" data-index="' + i + '">' +
+      '<div class="head"><b>Слайд ' + (i + 1) + '</b><span title="' + escapeHtml(ids[i] || '') + '">' + escapeHtml(kindRu(kinds[i])) + '</span></div>' +
+      '<div class="shot" data-busy=""><img src="' + imgUrl + '" alt="Слайд ' + (i + 1) + '" loading="lazy"></div>' +
+      '<div class="acts">' +
+      '<button type="button" data-action="recompose" title="Другая композиция из шаблона под этот же контент">Другая компоновка</button>' +
+      '<button type="button" data-action="rewrite" title="Модель переформулирует заголовок и тезисы">Переписать текст</button>' +
+      others.map(function(o){
+        var planIdx = mySrc.length ? mySrc[i] : i;
+        var absent = otherMaps[o][planIdx] === undefined;
+        return '<button type="button" data-action="take_from" data-source="' + o + '"' + (absent ? ' disabled title="В варианте ' + VARIANT_SHORT[o] + ' этого слайда нет (он без разделителей)"' : ' title="Слайд из варианта ' + VARIANT_SHORT[o] + ' как есть"') + '>Взять из ' + VARIANT_SHORT[o] + '</button>';
+      }).join('') +
+      '</div></div>';
+  }
+  grid.innerHTML = cards;
+  grid.querySelectorAll('.refine-card button').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var card = btn.closest('.refine-card');
+      runSlideEdit(job.job_id, variant, parseInt(card.getAttribute('data-index'), 10), btn.getAttribute('data-action'), btn.getAttribute('data-source'), card);
+    });
+  });
+}
+var EDIT_BUSY_TEXT = { recompose: 'Подбираем другую компоновку…', rewrite: 'Переписываем текст…', take_from: 'Переносим слайд…' };
+async function runSlideEdit(jobId, variant, index, action, source, card){
+  if(refineState.busy){ showToast('Дождитесь завершения предыдущей доработки'); return; }
+  refineState.busy = true;
+  var shot = card.querySelector('.shot');
+  shot.setAttribute('data-busy', EDIT_BUSY_TEXT[action] || 'Пересобираем…');
+  shot.classList.add('busy');
+  document.querySelectorAll('.refine-card button').forEach(function(b){ b.disabled = true; });
+  try{
+    var res = await api('/jobs/' + jobId + '/variants/' + variant + '/slides/' + index + '/edit', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action: action, source: source || null })
+    });
+    auditState.stamp = Date.now();
+    shot.setAttribute('data-busy', 'Обновляем превью…');
+    var img = shot.querySelector('img');
+    await new Promise(function(resolve){
+      img.onload = resolve; img.onerror = resolve;
+      img.src = apiBase() + '/jobs/' + jobId + '/variants/' + variant + '/preview/' + (index + 1) + '?v=' + auditState.stamp;
+    });
+    var head = card.querySelector('.head span');
+    if(head && res.kind){ head.textContent = kindRu(res.kind); head.title = res.after || ''; }
+    if(action === 'recompose' && res.after === res.before) showToast('Других композиций под этот слайд в шаблоне нет');
+    else showToast(action === 'rewrite' ? 'Тексты слайда переписаны' : (action === 'take_from' ? 'Слайд перенесён из другого варианта' : 'Компоновка заменена: ' + (res.after || '')));
+    var fresh = await api('/jobs/' + jobId);
+    state.lastJob = fresh;
+    renderAuditStale(fresh, variant);
+    renderContentPlan(fresh);
+  }catch(e){
+    showToast('Не удалось доработать слайд: ' + e.message, true);
+  }
+  shot.classList.remove('busy');
+  document.querySelectorAll('.refine-card button').forEach(function(b){ b.disabled = false; });
+  refineState.busy = false;
+}
+
+/* --- карта аудита: превью слайдов с рамками, клик по красной рамке → исправление --- */
+var auditState = { map: null, busy: false, stamp: Date.now() };
+
+async function loadAuditMap(jobId, variant){
+  var body = document.getElementById('auditBody');
+  if(!body) return;
+  try{
+    auditState.map = await api('/jobs/' + jobId + '/variants/' + variant + '/audit-map');
+  }catch(e){
+    body.innerHTML = '<p style="color:var(--danger);font-size:13px;">Не удалось загрузить карту аудита: ' + escapeHtml(e.message) + '</p>';
+    return;
+  }
+  renderAuditMap(jobId, variant);
+}
+
+function shapeIssues(slide, shape){
+  return slide.issues.filter(function(issue){
+    if(issue.shape_id !== null && issue.shape_id !== undefined) return issue.shape_id === shape.shape_id;
+    return false;
+  });
+}
+
+function renderAuditMap(jobId, variant){
+  var body = document.getElementById('auditBody');
+  var map = auditState.map;
+  if(!body || !map) return;
+  var allIssues = [];
+  map.slides.forEach(function(sl){ allIssues = allIssues.concat(sl.issues); });
+  allIssues = allIssues.concat(map.deck_issues || []);
+  var fixable = allIssues.filter(function(i){ return i.fixable; });
+  var fixedCount = (map.fixed_issue_ids || []).length;
+
+  var summary = '<div class="audit-summary">';
+  if(allIssues.length === 0){
+    summary += '<span class="chip ok">Замечаний нет — все проверки пройдены ✓</span>';
+  } else {
+    summary += '<span class="chip bad">' + allIssues.length + ' ' + plural(allIssues.length, ['замечание','замечания','замечаний']) + '</span>';
+    if(fixable.length){
+      summary += '<span class="chip">' + fixable.length + ' можно исправить автоматически</span>' +
+        '<button class="btn small danger" id="fixAllBtn"' + (auditState.busy ? ' disabled' : '') + '>Исправить все</button>';
+    }
+  }
+  if(fixedCount) summary += '<span class="chip fixed">Исправлено: ' + fixedCount + '</span>';
+  summary += '</div>' +
+    '<div class="audit-legend"><span class="l-bad"><i></i>есть замечание — кликните, чтобы посмотреть и&nbsp;исправить</span>' +
+    '<span class="l-ok"><i></i>проверки пройдены</span></div>';
+
+  var cards = map.slides.map(function(sl){
+    var slideLevel = sl.issues.filter(function(i){ return i.shape_id === null || i.shape_id === undefined; });
+    var bad = sl.issues.length > 0;
+    var frames = sl.shapes.map(function(sh){
+      var issues = shapeIssues(sl, sh);
+      var cls = issues.length ? 'bad' : 'ok';
+      var st = 'left:' + (sh.bbox.x*100).toFixed(2) + '%;top:' + (sh.bbox.y*100).toFixed(2) + '%;width:' + (sh.bbox.width*100).toFixed(2) + '%;height:' + (sh.bbox.height*100).toFixed(2) + '%;';
+      return '<div class="audit-frame ' + cls + '" style="' + st + '" data-shape="' + sh.shape_id + '" title="' + escapeHtml(shapeLabel(sh)) + (issues.length ? ' — ' + issues.length + ' ' + plural(issues.length, ['замечание','замечания','замечаний']) : ' — ок') + '">' +
+        (issues.length ? '<span class="count">' + issues.length + '</span>' : '') + '</div>';
+    }).join('');
+    var imgUrl = apiBase() + '/jobs/' + jobId + '/variants/' + variant + '/preview/' + sl.number + '?v=' + auditState.stamp;
+    var slideIssuesHtml = slideLevel.length ? '<div class="audit-slide-issues">' + slideLevel.map(function(issue){
+      return '<div class="audit-issue"><span class="badge ' + issue.category + '">' + (CATEGORY_LABELS[issue.category]||issue.category) + '</span>' +
+        '<div><div class="desc">' + escapeHtml(issue.description) + '</div><div class="hint">Замечание ко&nbsp;всему слайду — исправляется вручную или пересборкой</div></div></div>';
+    }).join('') + '</div>' : '';
+    return '<div class="audit-card' + (bad ? ' has-issues' : '') + '" data-slide="' + sl.slide_id + '">' +
+      '<div class="head"><span><b>Слайд ' + sl.number + '</b></span><span class="state ' + (bad ? 'bad' : 'ok') + '">' + (bad ? sl.issues.length + ' ' + plural(sl.issues.length, ['замечание','замечания','замечаний']) : 'Без замечаний') + '</span></div>' +
+      '<div class="audit-slide"><img src="' + imgUrl + '" alt="Слайд ' + sl.number + '" loading="lazy">' + frames + '</div>' +
+      slideIssuesHtml + '</div>';
+  }).join('');
+
+  var deck = (map.deck_issues || []).length ? '<div class="audit-results" style="margin-top:16px;">' + map.deck_issues.map(function(issue){
+    return '<div class="audit-issue"><span class="badge ' + issue.category + '">' + (CATEGORY_LABELS[issue.category]||issue.category) + '</span><div><div class="desc">' + escapeHtml(issue.description) + '</div></div></div>';
+  }).join('') + '</div>' : '';
+
+  body.innerHTML = summary + '<div class="audit-grid">' + cards + '</div>' + deck;
+
+  var fixAll = document.getElementById('fixAllBtn');
+  if(fixAll) fixAll.addEventListener('click', function(){
+    runFix(jobId, variant, fixable.map(function(i){ return i.issue_id; }), null);
+  });
+
+  body.querySelectorAll('.audit-frame.bad').forEach(function(frame){
+    frame.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      openIssuePopover(jobId, variant, frame);
+    });
+  });
+  if(!auditState.outsideBound){ auditState.outsideBound = true; document.addEventListener('click', closeIssuePopover); }
+}
+
+function shapeLabel(shape){
+  var name = shape.name || '';
+  if(/^title/i.test(name)) return 'Заголовок';
+  if(/^subtitle/i.test(name)) return 'Подзаголовок';
+  if(/^footer|^date|^slide number/i.test(name)) return 'Колонтитул';
+  if(shape.kind === 'picture') return 'Изображение';
+  if(shape.kind === 'chart') return 'Диаграмма';
+  if(shape.kind === 'table') return 'Таблица';
+  return 'Текстовый блок';
+}
+
+function closeIssuePopover(){
+  document.querySelectorAll('.audit-pop').forEach(function(p){ p.remove(); });
+  document.querySelectorAll('.audit-frame.active').forEach(function(f){ f.classList.remove('active'); });
+}
+
+function openIssuePopover(jobId, variant, frame){
+  closeIssuePopover();
+  var card = frame.closest('.audit-card');
+  var slideId = card.getAttribute('data-slide');
+  var shapeId = parseInt(frame.getAttribute('data-shape'), 10);
+  var slide = auditState.map.slides.filter(function(s){ return s.slide_id === slideId; })[0];
+  var shape = slide.shapes.filter(function(s){ return s.shape_id === shapeId; })[0];
+  var issues = shapeIssues(slide, shape);
+  frame.classList.add('active');
+
+  var fixableIds = issues.filter(function(i){ return i.fixable; }).map(function(i){ return i.issue_id; });
+  var pop = document.createElement('div');
+  pop.className = 'audit-pop';
+  pop.innerHTML = '<div class="title"><span>' + escapeHtml(shapeLabel(shape)) + '</span><button type="button" aria-label="Закрыть">×</button></div>' +
+    issues.map(function(issue){
+      return '<div class="audit-issue"><span class="badge ' + issue.category + '">' + (CATEGORY_LABELS[issue.category]||issue.category) + '</span>' +
+        '<div><div class="desc">' + escapeHtml(issue.description) + '</div>' +
+        (issue.fixable ? '' : '<div class="slide">Автоисправления нет — правится вручную в&nbsp;PowerPoint</div>') + '</div></div>';
+    }).join('') +
+    '<div class="actions">' +
+    (fixableIds.length ? '<button class="btn small primary fix-btn">Исправить' + (fixableIds.length > 1 ? ' (' + fixableIds.length + ')' : '') + '</button>' : '<span class="manual">Для этих замечаний автоисправление недоступно</span>') +
+    '</div>';
+  pop.addEventListener('click', function(ev){ ev.stopPropagation(); });
+  pop.querySelector('.title button').addEventListener('click', closeIssuePopover);
+  var fixBtn = pop.querySelector('.fix-btn');
+  if(fixBtn) fixBtn.addEventListener('click', function(){
+    fixBtn.disabled = true; fixBtn.textContent = 'Исправляем…';
+    runFix(jobId, variant, fixableIds, slideId);
+  });
+
+  var slideEl = card.querySelector('.audit-slide');
+  slideEl.appendChild(pop);
+  // Позиционируем под рамкой; если не помещается — над ней
+  var fTop = parseFloat(frame.style.top), fH = parseFloat(frame.style.height), fLeft = parseFloat(frame.style.left);
+  var popW = pop.offsetWidth, slideW = slideEl.clientWidth, slideH = slideEl.clientHeight;
+  var leftPx = Math.min(Math.max(0, fLeft/100*slideW), Math.max(0, slideW - popW - 6));
+  var topPx = (fTop + fH)/100*slideH + 6;
+  if(topPx + pop.offsetHeight > slideH) topPx = Math.max(4, fTop/100*slideH - pop.offsetHeight - 6);
+  pop.style.left = leftPx + 'px'; pop.style.top = topPx + 'px';
+}
+
+async function runFix(jobId, variant, issueIds, slideId){
+  if(auditState.busy || !issueIds.length) return;
+  auditState.busy = true;
+  closeIssuePopover();
+  var targets = slideId ? document.querySelectorAll('.audit-card[data-slide="' + slideId + '"] .audit-slide') : document.querySelectorAll('.audit-slide');
+  targets.forEach(function(el){ el.classList.add('busy'); });
+  var fixAll = document.getElementById('fixAllBtn'); if(fixAll) fixAll.disabled = true;
+  try{
+    var res = await api('/jobs/' + jobId + '/fix-issues', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ issue_ids: issueIds })
+    });
+    auditState.stamp = Date.now();
+    showToast(res.applied.length ? ('Исправлено: ' + res.applied.length + '. Аудит выполнен повторно.') : 'Исправления не потребовались.');
+  }catch(e){
+    showToast('Не удалось исправить: ' + e.message, true);
+  }
+  auditState.busy = false;
+  await loadAuditMap(jobId, variant);
+}
+
+function plural(n, forms){
+  var a = Math.abs(n) % 100, b = a % 10;
+  if(a > 10 && a < 20) return forms[2];
+  if(b > 1 && b < 5) return forms[1];
+  if(b === 1) return forms[0];
+  return forms[2];
+}
+
+function showToast(text, isError){
+  var t = document.getElementById('dfToast');
+  if(!t){
+    t = document.createElement('div'); t.id = 'dfToast';
+    t.style.cssText = 'position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:50;padding:10px 18px;border-radius:12px;font-size:13px;font-weight:600;box-shadow:0 12px 40px rgba(0,0,0,.5);transition:opacity .3s;';
+    document.body.appendChild(t);
+  }
+  t.style.background = isError ? 'rgba(255,122,122,.95)' : 'var(--surface-3)';
+  t.style.color = isError ? '#1a0b0b' : 'var(--text-0)';
+  t.style.border = '1px solid ' + (isError ? 'transparent' : 'var(--border-strong)');
+  t.textContent = text; t.style.opacity = '1';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(function(){ t.style.opacity = '0'; }, 3200);
+}
+
+/* ======================================================================
+   11. INIT
+====================================================================== */
+renderScenarioSelect();
+syncRange();
+promptInput.placeholder = DEFAULT_PLACEHOLDER;
+autosizePrompt();
+showScreen('landing');
+
+})();
 </script>
-
 </body>
 </html>

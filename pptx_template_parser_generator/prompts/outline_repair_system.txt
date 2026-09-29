@@ -1,0 +1,5 @@
+Исправь структуру презентации по errors. Верни только JSON без Markdown.
+В slides должно быть ровно slide_count объектов. Каждый объект обязан содержать
+точный variant из variant_catalog и непустой intent. Не придумывай variant.
+При source_mode=slides не повторяй варианты. Формат:
+{"slides":[{"variant":"точный id","intent":"смысл слайда","content_kinds":["text"]}]}.

@@ -4,7 +4,7 @@
 объектами python-pptx (+ опционально DesignManifest шаблона) и не вызывают
 никаких моделей — только поэтому аудит всегда отрабатывает быстро и
 одинаково для одного и того же .pptx. Полный список проверок и их область
-покрытия задокументированы в docs/AUDIT.md (требование ТЗ, раздел 4) —
+покрытия задокументированы в AUDIT.md (требование ТЗ, раздел 4) —
 чек-лист происходит из Приложения 1 официального ТЗ ("Критерии качества и
 аудита"), сокращённого/расширенного с обоснованием там же.
 
@@ -17,22 +17,24 @@ VLM (11 да/нет вопросов из Приложения 1, "Валида�
 from __future__ import annotations
 
 import asyncio
-import base64
+import json
 import logging
 import re
 import shutil
 import uuid
 from pathlib import Path
+from typing import Iterable
 
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.util import Emu
 
 from app.config import get_settings
-from app.llm_client import LLMClient
+from app.llm_client import ImageInput, LLMClient, LLMError
+from app.skills import load_skill, skill_text
 from app.pipeline.export import ExportError, export_presentation
 from app.schemas.design_manifest import DesignManifest
-from app.schemas.job import AuditCategory, AuditIssue
+from app.schemas.job import AuditBBox, AuditCategory, AuditIssue
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +70,21 @@ _PLACEHOLDER_TEXT_PATTERNS = (
 )
 
 
-def audit_presentation(pptx_path: str | Path, manifest: DesignManifest | None = None) -> list[AuditIssue]:
+def audit_presentation(
+    pptx_path: str | Path,
+    manifest: DesignManifest | None = None,
+    allowed_fonts: Iterable[str] | None = None,
+    allowed_sizes: Iterable[float] | None = None,
+) -> list[AuditIssue]:
     """Все детерминированные проверки. `manifest` включает проверки категории
     TEMPLATE (шрифт/кегль/цвет из шаблона) — без него они пропускаются, а не
-    падают, чтобы вызов оставался обратно совместим."""
+    падают, чтобы вызов оставался обратно совместим.
+
+    `allowed_fonts` / `allowed_sizes` — полная типографическая шкала шаблона из
+    Template JSON (все гарнитуры и кегли всех слотов всех макетов, см.
+    template_engine.font_families/font_sizes). Без них проверка сравнивает лишь
+    с двумя стилями манифеста (заголовок/текст), что даёт ложные срабатывания
+    на шаблонах с богатой типографикой."""
     path = Path(pptx_path)
     if not path.exists():
         return [
@@ -98,22 +111,23 @@ def audit_presentation(pptx_path: str | Path, manifest: DesignManifest | None = 
 
     for slide_idx, slide in enumerate(prs.slides):
         slide_id = f"slide-{slide_idx + 1}"
-        issues.extend(_check_bounds(slide, slide_id, prs.slide_width, prs.slide_height))
-        issues.extend(_check_edge_margins(slide, slide_id, prs.slide_width, prs.slide_height))
-        issues.extend(_check_overlap(slide, slide_id))
-        issues.extend(_check_text_overflow(slide, slide_id))
-        issues.extend(_check_density(slide, slide_id))
-        issues.extend(_check_table_size(slide, slide_id))
-        issues.extend(_check_chart_series(slide, slide_id))
-        issues.extend(_check_chart_annotations(slide, slide_id))
-        issues.extend(_check_placeholder_text(slide, slide_id))
-        issues.extend(_check_contrast(slide, slide_id))
-        issues.extend(_check_image_aspect_ratio(slide, slide_id))
+        sw, sh = prs.slide_width, prs.slide_height
+        issues.extend(_check_bounds(slide, slide_id, sw, sh))
+        issues.extend(_check_edge_margins(slide, slide_id, sw, sh))
+        issues.extend(_check_overlap(slide, slide_id, sw, sh))
+        issues.extend(_check_text_overflow(slide, slide_id, sw, sh))
+        issues.extend(_check_density(slide, slide_id, sw, sh))
+        issues.extend(_check_table_size(slide, slide_id, sw, sh))
+        issues.extend(_check_chart_series(slide, slide_id, sw, sh))
+        issues.extend(_check_chart_annotations(slide, slide_id, sw, sh))
+        issues.extend(_check_placeholder_text(slide, slide_id, sw, sh))
+        issues.extend(_check_contrast(slide, slide_id, sw, sh))
+        issues.extend(_check_image_aspect_ratio(slide, slide_id, sw, sh))
         issues.extend(_check_empty_slide(slide, slide_id))
-        issues.extend(_check_fill_ratio(slide, slide_id, prs.slide_width, prs.slide_height))
-        issues.extend(_check_rasterized_slide(slide, slide_id))
+        issues.extend(_check_fill_ratio(slide, slide_id, sw, sh))
+        issues.extend(_check_rasterized_slide(slide, slide_id, sw, sh))
         if manifest is not None:
-            issues.extend(_check_template_conformance(slide, slide_id, manifest))
+            issues.extend(_check_template_conformance(slide, slide_id, manifest, sw, sh, allowed_fonts, allowed_sizes))
         slide_texts.append(_slide_text_signature(slide))
 
     issues.extend(_check_duplicate_slides(slide_texts))
@@ -128,7 +142,13 @@ def _new_issue(
     *,
     deterministic: bool = True,
     auto_fixable: bool = False,
+    bbox: AuditBBox | None = None,
+    code: str | None = None,
+    shape=None,
 ) -> AuditIssue:
+    """`code` — машиночитаемый тип проблемы (см. app/pipeline/audit_fix.py:
+    по нему выбирается точечное исправление), `shape` — фигура python-pptx,
+    к которой относится проблема (shape_id уникален внутри слайда)."""
     return AuditIssue(
         issue_id=str(uuid.uuid4()),
         slide_id=slide_id,
@@ -136,6 +156,41 @@ def _new_issue(
         deterministic=deterministic,
         description=description,
         auto_fixable=auto_fixable,
+        bbox=bbox,
+        code=code,
+        shape_id=getattr(shape, "shape_id", None) if shape is not None else None,
+        shape_name=getattr(shape, "name", None) if shape is not None else None,
+    )
+
+
+def _shape_bbox(shape, slide_width: int, slide_height: int) -> AuditBBox | None:
+    """Рамка фигуры, нормализованная к размеру слайда — для подсветки места
+    поверх PNG-превью (см. app/pipeline/audit_overlay.py)."""
+    if None in (shape.left, shape.top, shape.width, shape.height) or slide_width <= 0 or slide_height <= 0:
+        return None
+    return AuditBBox(
+        x=shape.left / slide_width,
+        y=shape.top / slide_height,
+        width=shape.width / slide_width,
+        height=shape.height / slide_height,
+    )
+
+
+def _union_bbox(a, b, slide_width: int, slide_height: int) -> AuditBBox | None:
+    """Объединяющая рамка двух фигур — для проверок вроде наложения, где
+    проблема относится сразу к паре фигур, а не к одной."""
+    shapes = (a, b)
+    if any(None in (s.left, s.top, s.width, s.height) for s in shapes) or slide_width <= 0 or slide_height <= 0:
+        return None
+    x0 = min(s.left for s in shapes)
+    y0 = min(s.top for s in shapes)
+    x1 = max(s.left + s.width for s in shapes)
+    y1 = max(s.top + s.height for s in shapes)
+    return AuditBBox(
+        x=x0 / slide_width,
+        y=y0 / slide_height,
+        width=(x1 - x0) / slide_width,
+        height=(y1 - y0) / slide_height,
     )
 
 
@@ -165,7 +220,9 @@ def _check_bounds(slide, slide_id: str, slide_width: int, slide_height: int) -> 
                 if has_text
                 else f"Фигура «{shape.name}» выходит за границы слайда"
             )
-            issues.append(_new_issue(slide_id, AuditCategory.LAYOUT, description))
+            issues.append(
+                _new_issue(slide_id, AuditCategory.LAYOUT, description, code="out_of_bounds", bbox=_shape_bbox(shape, slide_width, slide_height), shape=shape)
+            )
     return issues
 
 
@@ -219,25 +276,62 @@ def _check_edge_margins(slide, slide_id: str, slide_width: int, slide_height: in
                     slide_id,
                     AuditCategory.LAYOUT,
                     f"«{shape.name}» заходит в поле у края слайда (меньше {_EDGE_MARGIN_RATIO:.0%} отступа)",
+                    code="edge_margin",
+                    bbox=_shape_bbox(shape, slide_width, slide_height),
+                    shape=shape,
                 )
             )
     return issues
 
 
-def _check_overlap(slide, slide_id: str) -> list[AuditIssue]:
+def _check_overlap(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
+    """Наложения содержательных фигур: текст на тексте, текст на таблице/графике/
+    картинке. Декор шаблона (плашки, точки, линии без текста) не проверяется,
+    а вложение (текст внутри своей плашки-карточки) — это дизайн, не ошибка;
+    считается только частичное пересечение заметной площади."""
     issues = []
-    shapes = [s for s in slide.shapes if None not in (s.left, s.top, s.width, s.height)]
+    shapes = [s for s in slide.shapes if None not in (s.left, s.top, s.width, s.height) and _is_content_shape(s)]
     for i in range(len(shapes)):
         for j in range(i + 1, len(shapes)):
-            if _rects_overlap(shapes[i], shapes[j]):
+            if _rects_overlap(shapes[i], shapes[j]) and not _contains(shapes[i], shapes[j]) and not _contains(shapes[j], shapes[i]) \
+                    and _overlap_ratio(shapes[i], shapes[j]) >= 0.1:
                 issues.append(
                     _new_issue(
                         slide_id,
                         AuditCategory.LAYOUT,
                         f"Фигуры «{shapes[i].name}» и «{shapes[j].name}» перекрываются",
+                        bbox=_union_bbox(shapes[i], shapes[j], slide_width, slide_height),
+                        code="shapes_overlap",
                     )
                 )
     return issues
+
+
+def _is_content_shape(shape) -> bool:
+    if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip():
+        return True
+    if getattr(shape, "has_table", False) or getattr(shape, "has_chart", False):
+        return True
+    return shape.shape_type == 13  # MSO_SHAPE_TYPE.PICTURE
+
+
+def _contains(outer, inner, tol: float = 0.02) -> bool:
+    """`inner` целиком (с допуском 2% размера) внутри `outer`."""
+    tx, ty = int(outer.width * tol), int(outer.height * tol)
+    return (
+        outer.left - tx <= inner.left
+        and outer.top - ty <= inner.top
+        and inner.left + inner.width <= outer.left + outer.width + tx
+        and inner.top + inner.height <= outer.top + outer.height + ty
+    )
+
+
+def _overlap_ratio(a, b) -> float:
+    """Площадь пересечения к площади меньшей фигуры."""
+    ix = max(0, min(a.left + a.width, b.left + b.width) - max(a.left, b.left))
+    iy = max(0, min(a.top + a.height, b.top + b.height) - max(a.top, b.top))
+    smaller = max(1, min(a.width * a.height, b.width * b.height))
+    return (ix * iy) / smaller
 
 
 def _rects_overlap(a, b) -> bool:
@@ -246,7 +340,7 @@ def _rects_overlap(a, b) -> bool:
     return ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1
 
 
-def _check_text_overflow(slide, slide_id: str) -> list[AuditIssue]:
+def _check_text_overflow(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
     """"Текст не поместился в свою рамку" — эвристика без реального рендера
     шрифтов: считаем, сколько строк текст займёт при word-wrap на ширине
     фигуры (символов на строку убывает пропорционально кеглю), сравниваем с
@@ -295,6 +389,9 @@ def _check_text_overflow(slide, slide_id: str) -> list[AuditIssue]:
                     AuditCategory.LAYOUT,
                     f"Текст в «{shape.name}» вероятно не помещается в рамку "
                     f"(нужно ~{needed_lines} строк, влезает ~{available_lines:.1f})",
+                    code="text_overflow",
+                    bbox=_shape_bbox(shape, slide_width, slide_height),
+                    shape=shape,
                 )
             )
     return issues
@@ -309,7 +406,7 @@ def _paragraph_font_size_pt(paragraph) -> float:
     return 18.0
 
 
-def _check_image_aspect_ratio(slide, slide_id: str) -> list[AuditIssue]:
+def _check_image_aspect_ratio(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
     """"Картинка растянута, пропорции нарушены" — сравнивает соотношение
     сторон итоговой рамки (shape.width/height) с исходным соотношением
     сторон файла картинки (image.size, в пикселях исходного файла)."""
@@ -334,6 +431,9 @@ def _check_image_aspect_ratio(slide, slide_id: str) -> list[AuditIssue]:
                     slide_id,
                     AuditCategory.LAYOUT,
                     f"Изображение «{shape.name}» растянуто — пропорции искажены на {distortion:.0%}",
+                    code="image_distorted",
+                    bbox=_shape_bbox(shape, slide_width, slide_height),
+                    shape=shape,
                 )
             )
     return issues
@@ -344,7 +444,7 @@ def _check_image_aspect_ratio(slide, slide_id: str) -> list[AuditIssue]:
 # --------------------------------------------------------------------------
 
 
-def _check_contrast(slide, slide_id: str) -> list[AuditIssue]:
+def _check_contrast(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
     """Проверяет контраст ЯВНО заданного цвета текста относительно фона.
 
     Ограничение: считается, только если и текст, и фон имеют явный srgbClr
@@ -377,6 +477,9 @@ def _check_contrast(slide, slide_id: str) -> list[AuditIssue]:
                             slide_id,
                             AuditCategory.TEMPLATE,
                             f"Низкий контраст текста «{run.text[:30]}»: {ratio:.1f}:1 (минимум {_MIN_CONTRAST_RATIO}:1)",
+                            code="low_contrast",
+                            bbox=_shape_bbox(shape, slide_width, slide_height),
+                    shape=shape,
                         )
                     )
     return issues
@@ -407,7 +510,15 @@ def _background_rgb(slide) -> RGBColor | None:
         return None
 
 
-def _check_template_conformance(slide, slide_id: str, manifest: DesignManifest) -> list[AuditIssue]:
+def _check_template_conformance(
+    slide,
+    slide_id: str,
+    manifest: DesignManifest,
+    slide_width: int,
+    slide_height: int,
+    template_fonts: Iterable[str] | None = None,
+    template_sizes: Iterable[float] | None = None,
+) -> list[AuditIssue]:
     """"Шрифт не из шаблона или гарнитур больше двух", "кегль не из
     типографической шкалы шаблона", "цвет не из палитры шаблона" —
     сравнивает явно заданные (не унаследованные из темы) атрибуты runs
@@ -415,8 +526,10 @@ def _check_template_conformance(slide, slide_id: str, manifest: DesignManifest) 
     """
     issues: list[AuditIssue] = []
 
-    allowed_fonts = {manifest.typography.title.font, manifest.typography.body.font}
-    allowed_sizes = {float(manifest.typography.title.size), float(manifest.typography.body.size)}
+    allowed_fonts = {manifest.typography.title.font, manifest.typography.body.font} | set(template_fonts or ())
+    allowed_sizes = {float(manifest.typography.title.size), float(manifest.typography.body.size)} | {
+        float(size) for size in (template_sizes or ())
+    }
     allowed_colors = {c.upper().lstrip("#") for c in manifest.palette.values()}
 
     seen_fonts: set[str] = set()
@@ -440,6 +553,9 @@ def _check_template_conformance(slide, slide_id: str, manifest: DesignManifest) 
                                 slide_id,
                                 AuditCategory.TEMPLATE,
                                 f"Шрифт «{run.font.name}» не входит в типографику шаблона ({', '.join(allowed_fonts)})",
+                                code="font_off_template",
+                                bbox=_shape_bbox(shape, slide_width, slide_height),
+                    shape=shape,
                             )
                         )
                         reported_font_mismatch = True
@@ -453,6 +569,9 @@ def _check_template_conformance(slide, slide_id: str, manifest: DesignManifest) 
                                 AuditCategory.TEMPLATE,
                                 f"Кегль {size_pt:.0f}pt не входит в типографическую шкалу шаблона "
                                 f"({', '.join(f'{s:.0f}pt' for s in sorted(allowed_sizes))})",
+                                code="font_size_off_scale",
+                                bbox=_shape_bbox(shape, slide_width, slide_height),
+                    shape=shape,
                             )
                         )
                         reported_size_mismatch = True
@@ -466,6 +585,9 @@ def _check_template_conformance(slide, slide_id: str, manifest: DesignManifest) 
                                     slide_id,
                                     AuditCategory.TEMPLATE,
                                     f"Цвет текста #{color_hex} не входит в палитру шаблона",
+                                    code="color_off_palette",
+                                    bbox=_shape_bbox(shape, slide_width, slide_height),
+                    shape=shape,
                                 )
                             )
                             reported_color_mismatch = True
@@ -489,11 +611,12 @@ def _check_template_conformance(slide, slide_id: str, manifest: DesignManifest) 
 # --------------------------------------------------------------------------
 
 
-def _check_density(slide, slide_id: str) -> list[AuditIssue]:
+def _check_density(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
     issues = []
     for shape in slide.shapes:
         if not shape.has_text_frame:
             continue
+        bbox = _shape_bbox(shape, slide_width, slide_height)
         paragraphs = [p for p in shape.text_frame.paragraphs if p.text.strip()]
         if len(paragraphs) > _MAX_BULLETS_PER_SLIDE:
             issues.append(
@@ -501,7 +624,10 @@ def _check_density(slide, slide_id: str) -> list[AuditIssue]:
                     slide_id,
                     AuditCategory.DENSITY,
                     f"Больше {_MAX_BULLETS_PER_SLIDE} буллетов в блоке «{shape.name}» ({len(paragraphs)})",
+                    code="too_many_bullets",
                     auto_fixable=True,
+                    bbox=bbox,
+                    shape=shape,
                 )
             )
         for p in paragraphs:
@@ -512,17 +638,21 @@ def _check_density(slide, slide_id: str) -> list[AuditIssue]:
                         slide_id,
                         AuditCategory.DENSITY,
                         f"Буллет длиннее {_MAX_WORDS_PER_BULLET} слов ({word_count}): «{p.text[:60]}»",
+                        code="bullet_too_long",
                         auto_fixable=True,
+                        bbox=bbox,
+                        shape=shape,
                     )
                 )
     return issues
 
 
-def _check_table_size(slide, slide_id: str) -> list[AuditIssue]:
+def _check_table_size(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
     issues = []
     for shape in slide.shapes:
         if not shape.has_table:
             continue
+        bbox = _shape_bbox(shape, slide_width, slide_height)
         table = shape.table
         n_rows, n_cols = len(table.rows), len(table.columns)
         if n_rows > _MAX_TABLE_ROWS:
@@ -531,6 +661,9 @@ def _check_table_size(slide, slide_id: str) -> list[AuditIssue]:
                     slide_id,
                     AuditCategory.DENSITY,
                     f"Таблица «{shape.name}» содержит {n_rows} строк (максимум {_MAX_TABLE_ROWS})",
+                    code="table_too_many_rows",
+                    bbox=bbox,
+                    shape=shape,
                 )
             )
         if n_cols > _MAX_TABLE_COLS:
@@ -539,12 +672,15 @@ def _check_table_size(slide, slide_id: str) -> list[AuditIssue]:
                     slide_id,
                     AuditCategory.DENSITY,
                     f"Таблица «{shape.name}» содержит {n_cols} колонок (максимум {_MAX_TABLE_COLS})",
+                    code="table_too_many_cols",
+                    bbox=bbox,
+                    shape=shape,
                 )
             )
     return issues
 
 
-def _check_chart_series(slide, slide_id: str) -> list[AuditIssue]:
+def _check_chart_series(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
     issues = []
     for shape in slide.shapes:
         if not shape.has_chart:
@@ -559,6 +695,9 @@ def _check_chart_series(slide, slide_id: str) -> list[AuditIssue]:
                     slide_id,
                     AuditCategory.DENSITY,
                     f"Диаграмма «{shape.name}» содержит {n_series} серий (максимум {_MAX_CHART_SERIES})",
+                    code="chart_too_many_series",
+                    bbox=_shape_bbox(shape, slide_width, slide_height),
+                    shape=shape,
                 )
             )
     return issues
@@ -570,7 +709,7 @@ def _check_fill_ratio(slide, slide_id: str, slide_width: int, slide_height: int)
     перекрытия грубо, суммируя площади без пересечений — достаточно для
     ориентировочной оценки плотности, не требует точной геометрии полигонов)."""
     slide_area = slide_width * slide_height
-    if slide_area <= 0:
+    if slide_area <= 0 or _is_structural_slide(slide):
         return []
 
     covered = 0
@@ -604,7 +743,7 @@ def _check_fill_ratio(slide, slide_id: str, slide_width: int, slide_height: int)
 # --------------------------------------------------------------------------
 
 
-def _check_placeholder_text(slide, slide_id: str) -> list[AuditIssue]:
+def _check_placeholder_text(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
     issues = []
     for shape in slide.shapes:
         if not shape.has_text_frame:
@@ -617,10 +756,27 @@ def _check_placeholder_text(slide, slide_id: str) -> list[AuditIssue]:
                         slide_id,
                         AuditCategory.INTEGRITY,
                         f"Найден текст-заглушка в «{shape.name}»: «{text[:60]}»",
+                        code="placeholder_text",
+                        bbox=_shape_bbox(shape, slide_width, slide_height),
+                    shape=shape,
                     )
                 )
                 break
     return issues
+
+
+_STRUCTURAL_LAYOUT_MARKERS = ("раздел", "титул", "финал", "section", "title", "cover", "closing", "спасибо", "обложк")
+
+
+def _is_structural_slide(slide) -> bool:
+    """Обложка, разделитель, финальный слайд: по макету шаблона они и должны
+    быть «пустыми» (один заголовок на паттерне) — проверки заполненности и
+    «слайд только с заголовком» для них не имеют смысла."""
+    try:
+        name = (slide.slide_layout.name or "").lower()
+    except (AttributeError, KeyError):
+        return False
+    return any(marker in name for marker in _STRUCTURAL_LAYOUT_MARKERS)
 
 
 def _check_empty_slide(slide, slide_id: str) -> list[AuditIssue]:
@@ -642,19 +798,20 @@ def _check_empty_slide(slide, slide_id: str) -> list[AuditIssue]:
         return []
 
     if len(text_shapes) == 0:
-        return [_new_issue(slide_id, AuditCategory.INTEGRITY, "Слайд полностью пуст")]
-    if len(text_shapes) == 1:
+        return [_new_issue(slide_id, AuditCategory.INTEGRITY, "Слайд полностью пуст", code="empty_slide")]
+    if len(text_shapes) == 1 and not _is_structural_slide(slide):
         return [
             _new_issue(
                 slide_id,
                 AuditCategory.INTEGRITY,
                 f"На слайде только заголовок «{text_shapes[0].text_frame.text[:40]}», нет содержания",
+                code="empty_slide",
             )
         ]
     return []
 
 
-def _check_chart_annotations(slide, slide_id: str) -> list[AuditIssue]:
+def _check_chart_annotations(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
     """"У диаграммы нет подписей осей, единиц или легенды"."""
     issues = []
     for shape in slide.shapes:
@@ -686,12 +843,15 @@ def _check_chart_annotations(slide, slide_id: str) -> list[AuditIssue]:
                     slide_id,
                     AuditCategory.INTEGRITY,
                     f"У диаграммы «{shape.name}» нет ни легенды, ни подписей осей, ни подписей данных",
+                    code="chart_no_annotations",
+                    bbox=_shape_bbox(shape, slide_width, slide_height),
+                    shape=shape,
                 )
             )
     return issues
 
 
-def _check_rasterized_slide(slide, slide_id: str) -> list[AuditIssue]:
+def _check_rasterized_slide(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
     """"Слайд оказался картинкой, а не редактируемыми объектами" — слайд,
     целиком состоящий из одной картинки, покрывающей почти всю площадь, и
     больше ничего (кроме опционально пустых фигур)."""
@@ -712,6 +872,9 @@ def _check_rasterized_slide(slide, slide_id: str) -> list[AuditIssue]:
                 slide_id,
                 AuditCategory.INTEGRITY,
                 "Слайд состоит из единственной картинки без редактируемого текста/таблиц/графиков",
+                code="rasterized_slide",
+                bbox=_shape_bbox(picture_shapes[0], slide_width, slide_height),
+                shape=picture_shapes[0],
             )
         ]
     return []
@@ -760,21 +923,15 @@ def _check_duplicate_slides(slide_texts: list[str]) -> list[AuditIssue]:
 # Валидация контента через VLM (недетерминированная, Приложение 1)
 # --------------------------------------------------------------------------
 
-_VLM_QUESTIONS = [
-    "Заголовок содержит вывод, а не просто называет тему?",
-    "Содержимое слайда соответствует заголовку?",
-    "Слайд пересказывается одним предложением?",
-    "Все цифры и факты со слайда выглядят взаимно согласованными (не противоречат друг другу)?",
-    "На слайде есть содержание, а не только заголовок?",
-    "Картинки и иконки (если есть) относятся к теме слайда?",
-    "Нет служебного мусора: реплик спикера, кусков промпта, технических артефактов?",
-    "Текст без опечаток?",
-    "Текст на слайде на одном языке (без случайного смешения языков)?",
-    "Все строки таблицы и элементы легенды (если есть) работают на мысль слайда, а не случайны?",
-    "Слайд логично мог бы стоять в деловой презентации на заявленную тему?",
-]
+# Вопросы и системный промпт VLM-аудита лежат в skills/visual_audit.yaml (не в коде).
+_VLM_SKILL = "visual_audit"
+_VLM_QUESTIONS: list[str] = [str(q["text"]) for q in load_skill(_VLM_SKILL)["questions"]]
+_VLM_QUESTION_KEYS: list[str] = [str(q["key"]) for q in load_skill(_VLM_SKILL)["questions"]]
 
-_VLM_QUESTION_KEYS = [f"q{i}" for i in range(1, len(_VLM_QUESTIONS) + 1)]
+# Вопросы, не имеющие смысла для структурных слайдов (обложка, разделитель,
+# финал): у них по макету только заголовок/подзаголовок — «заголовок-вывод»,
+# «есть содержание», «пересказ одним предложением», «логично в презентации».
+_VLM_SKIP_FOR_STRUCTURAL = set(load_skill(_VLM_SKILL).get("skip_for_structural") or ["q1", "q3", "q5", "q11"])
 
 
 async def render_slides_to_png(pptx_path: str | Path, output_dir: str | Path) -> list[Path]:
@@ -840,11 +997,10 @@ async def audit_content_with_vlm(
     if not png_paths:
         return []
 
-    client = LLMClient(
-        base_url=settings.VLM_BASE_URL,
-        model_name=settings.VLM_MODEL_NAME,
-        api_key=settings.VLM_API_KEY,
-    )
+    try:
+        structural = {idx for idx, slide in enumerate(Presentation(str(pptx_path)).slides) if _is_structural_slide(slide)}
+    except Exception:  # noqa: BLE001
+        structural = set()
 
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
@@ -866,6 +1022,8 @@ async def audit_content_with_vlm(
 
         slide_issues = []
         for question, key in zip(_VLM_QUESTIONS, _VLM_QUESTION_KEYS):
+            if idx in structural and key in _VLM_SKIP_FOR_STRUCTURAL:
+                continue
             verdict = answers.get(key)
             if verdict is False:
                 reason = answers.get(f"{key}_reason", "")
@@ -877,29 +1035,53 @@ async def audit_content_with_vlm(
                 )
         return slide_issues
 
-    results = await asyncio.gather(*(_audit_one(i, p) for i, p in enumerate(png_paths)))
+    async with LLMClient(
+        base_url=settings.VLM_BASE_URL,
+        model_name=settings.VLM_MODEL_NAME,
+        api_key=settings.VLM_API_KEY,
+    ) as client:
+        results = await asyncio.gather(*(_audit_one(i, p) for i, p in enumerate(png_paths)))
     issues: list[AuditIssue] = []
     for slide_issues in results:
         issues.extend(slide_issues)
     return issues
 
 
-async def _ask_vlm_about_slide(client: LLMClient, png_path: Path) -> dict:
-    image_b64 = base64.b64encode(png_path.read_bytes()).decode("ascii")
-    data_url = f"data:image/png;base64,{image_b64}"
-
+async def _ask_vlm_about_slide(client: LLMClient, png_path: Path) -> dict[str, bool | str]:
     questions_block = "\n".join(f"{key}: {question}" for key, question in zip(_VLM_QUESTION_KEYS, _VLM_QUESTIONS))
-    system_prompt = (
-        "Ты — контроль качества деловых презентаций. На вход — картинка одного слайда. "
-        "Ответь на каждый из перечисленных вопросов da/net (true/false в JSON), строго по тому, "
-        "что видно на картинке — не придумывай контекст, которого там нет. "
-        "Для каждого вопроса, где ответ false, добавь короткое поле <key>_reason с объяснением "
-        "в одно предложение. Ответ — СТРОГО JSON-объект с ключами q1..q11 (boolean) и опциональными "
-        "*_reason (string), без markdown-обёртки."
+    system_prompt = skill_text(_VLM_SKILL, "system_prompt")
+    raw = await client.chat(
+        system_prompt=system_prompt,
+        user_input=f"Вопросы:\n{questions_block}",
+        images=[ImageInput.from_path(png_path)],
     )
-    user_content = [
-        {"type": "text", "text": f"Вопросы:\n{questions_block}"},
-        {"type": "image_url", "image_url": {"url": data_url}},
-    ]
+    return _parse_vlm_answers(raw)
 
-    return await client.chat_json_multimodal(system_prompt, user_content)
+
+def _parse_vlm_answers(raw: str) -> dict[str, bool | str]:
+    """Проверяет JSON из обычного чата, чтобы неполный ответ не прошёл аудит."""
+    text = raw.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1)
+    try:
+        answers = json.loads(text)
+    except ValueError as exc:
+        raise LLMError("VLM вернула невалидный JSON аудита") from exc
+    if not isinstance(answers, dict):
+        raise LLMError("Ответ VLM-аудита должен быть JSON-объектом")
+
+    result: dict[str, bool | str] = {}
+    for key in _VLM_QUESTION_KEYS:
+        verdict = answers.get(key)
+        if not isinstance(verdict, bool):
+            raise LLMError(f"В ответе VLM отсутствует boolean-поле {key}")
+        reason_key = f"{key}_reason"
+        reason = answers.get(reason_key, "")
+        if not isinstance(reason, str):
+            raise LLMError(f"Поле {reason_key} должно быть строкой")
+        if not verdict and not reason.strip():
+            raise LLMError(f"Для отрицательного ответа {key} требуется объяснение")
+        result[key] = verdict
+        result[reason_key] = reason.strip()
+    return result

@@ -1,6 +1,7 @@
 
 import os
 import argparse
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -971,6 +972,12 @@ def _replace_slide_text(shape, label):
         shape.text_frame.paragraphs[0].add_run().text = label
 
 
+_SOURCE_PLACEHOLDER_TEXT = re.compile(
+    r"^(?:text(?:_\d+|\s+\d+)?|lorem ipsum|xxx|todo|вставьте текст)$",
+    re.IGNORECASE,
+)
+
+
 def _prepare_slide_variants(prs, variants):
     """Replace slide content with editable slots without modifying template JSON."""
     for variant in variants:
@@ -982,8 +989,46 @@ def _prepare_slide_variants(prs, variants):
             if slot["placeholder_idx"] is None:
                 _replace_picture_with_placeholder(slide, slot["shape_index"], next_idx)
                 next_idx += 1
-        for name, slot in variant["slots"].items():
+        editable_slots = {
+            name: slot for name, slot in variant["slots"].items()
+            if slot.get("editable", True) and not slot.get("decorative", False)
+        }
+        for name, slot in editable_slots.items():
             _replace_slide_text(slide.shapes[slot["shape_index"]], name)
+        # Some authored decks contain extra sample labels that are not exposed
+        # as editable slots. They are content, not design, so do not leak them
+        # into a generated deck. Keep all non-placeholder template wording.
+        slot_indices = {
+            slot["shape_index"] for slot in editable_slots.values()
+        }
+        for shape_index, shape in enumerate(slide.shapes):
+            if shape_index in slot_indices or not getattr(shape, "has_text_frame", False):
+                continue
+            if _SOURCE_PLACEHOLDER_TEXT.fullmatch(shape.text.strip()):
+                _replace_slide_text(shape, "")
+
+
+def _retain_and_reorder_slide_variants(prs, variants_by_id, slides):
+    """Keep only selected authored slides and arrange them in plan order."""
+    selected_ids = [item["variant"] for item in slides]
+    if len(selected_ids) != len(set(selected_ids)):
+        raise ValueError(
+            "В режиме source_mode=slides один authored-slide variant нельзя "
+            "использовать повторно. Выберите разные варианты."
+        )
+    original_ids = list(prs.slides._sldIdLst)
+    selected_elements = [
+        original_ids[variants_by_id[variant_id]["slide_index"]]
+        for variant_id in selected_ids
+    ]
+    selected_identity = {id(element) for element in selected_elements}
+    for element in original_ids:
+        if id(element) not in selected_identity:
+            prs.part.drop_rel(element.rId)
+            prs.slides._sldIdLst.remove(element)
+    for element in selected_elements:
+        prs.slides._sldIdLst.remove(element)
+        prs.slides._sldIdLst.append(element)
 
 
 def _fill_slide_variant(slide, variant, content, image_content):
@@ -1103,6 +1148,9 @@ def create_presentation(
                 content=content,
                 assets_dir=assets_dir,
             )
+
+    if source_file and template.get("source_mode") == "slides":
+        _retain_and_reorder_slide_variants(prs, variant_by_id, slides)
 
     # --------------------------------------------------------
     # Сохранение
@@ -1277,4 +1325,3 @@ if __name__ == "__main__":
                         source_file=source_file)
     save_template_json(template, json_file)
     print(f"JSON шаблона сохранён: {json_file}")
-

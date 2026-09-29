@@ -4,5 +4,9 @@ python-multipart
 python-pptx
 pydantic-settings
 httpx
+openai>=2,<3
 PyYAML
 openpyxl
+pdf2image>=1.17.0
+Pillow>=10,<13
+segno>=1.6

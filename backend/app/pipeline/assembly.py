@@ -28,8 +28,10 @@ from pathlib import Path
 from pptx import Presentation
 from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE
+from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN
-from pptx.util import Pt
+from pptx.dml.color import RGBColor
+from pptx.util import Emu, Pt
 
 from app.pipeline.capacity import fit_chart_data, fit_table_data
 from app.pipeline.layout_engine import (
@@ -132,23 +134,67 @@ def _render_slide(slide, pattern: Pattern, slide_spec: SlideSpec, manifest: Desi
     slide_width = manifest.slide_width_emu
     slide_height = manifest.slide_height_emu
 
+    _apply_slide_background(slide, manifest)
+
     title_z = title_zone(pattern)
     if title_z is not None:
         _render_title(slide, title_z, slide_spec.title, manifest, slide_width, slide_height)
+        _render_accent_bar(slide, title_z, manifest, slide_width, slide_height)
 
     assignments = assign_zones(pattern, slide_spec)
     for assignment in assignments:
         _render_zone(slide, assignment, manifest, slide_width, slide_height)
 
 
+def _hex_to_rgb(hex_value: str | None, fallback: str) -> RGBColor:
+    value = (hex_value or fallback).lstrip("#")
+    if len(value) != 6:
+        value = fallback
+    return RGBColor.from_string(value.upper())
+
+
+def _apply_slide_background(slide, manifest: DesignManifest) -> None:
+    """Красит фон слайда токеном темы (lt1/lt2), а не оставляет чистый белый
+    по умолчанию — раньше здесь не было НИКАКОЙ заливки фона, из-за чего
+    результат выглядел как обычный пустой PowerPoint, а не брендированная
+    презентация (см. диагностику design-бага, баг A)."""
+    bg_hex = manifest.palette.get("lt1") or manifest.palette.get("bg1")
+    if not bg_hex:
+        return
+    fill = slide.background.fill
+    fill.solid()
+    fill.fore_color.rgb = _hex_to_rgb(bg_hex, "FFFFFF")
+
+
+def _render_accent_bar(slide, title_zone_obj: Zone, manifest: DesignManifest, sw: int, sh: int) -> None:
+    """Добавляет тонкую акцентную плашку слева от заголовка — раньше accent-
+    цвета темы использовались только в таблицах/графиках (см. styling.py),
+    а на обычных текстовых слайдах не было вообще никаких брендированных
+    декоративных элементов (баг B), из-за чего слайды выглядели как generic
+    PowerPoint без привязки к фирменному стилю шаблона."""
+    accent_hex = manifest.palette.get("accent1")
+    if not accent_hex:
+        return
+    left, top, _width, height = zone_bbox_emu(title_zone_obj, sw, sh)
+    bar_width = Emu(int(sw * 0.008))
+    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, bar_width, height)
+    bar.fill.solid()
+    bar.fill.fore_color.rgb = _hex_to_rgb(accent_hex, "0077FF")
+    bar.line.fill.background()
+    bar.shadow.inherit = False
+
+
 def _render_title(slide, zone: Zone, title_text: str, manifest: DesignManifest, sw: int, sh: int) -> None:
     left, top, width, height = zone_bbox_emu(zone, sw, sh)
-    textbox = slide.shapes.add_textbox(left, top, width, height)
+    # Сдвигаем текст заголовка вправо от акцентной плашки (см. _render_accent_bar),
+    # чтобы полоска не перекрывала первые символы текста.
+    accent_offset = Emu(int(sw * 0.02)) if manifest.palette.get("accent1") else 0
+    textbox = slide.shapes.add_textbox(left + accent_offset, top, width - accent_offset, height)
     text_frame = textbox.text_frame
     text_frame.word_wrap = True
     text_frame.text = title_text
     text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT
-    style_title_textbox(text_frame, manifest)
+    style_title_textbox(text_frame, manifest, box_width_emu=width - accent_offset, box_height_emu=height)
 
 
 def _render_zone(slide, assignment: ZoneAssignment, manifest: DesignManifest, sw: int, sh: int) -> None:
@@ -182,7 +228,7 @@ def _render_text_block(slide, bbox: tuple[int, int, int, int], block: ContentBlo
     else:
         text_frame.text = block.text or ""
 
-    style_body_textbox(text_frame, manifest)
+    style_body_textbox(text_frame, manifest, box_width_emu=width, box_height_emu=height)
     # Буллеты получают явный маркер — python-pptx не рисует его сам без
     # <a:buChar>/<a:buAutoNum> в pPr, а голый текстовый фрейм по умолчанию
     # выводит параграфы без каких-либо маркеров.
@@ -211,8 +257,11 @@ def _add_native_chart(slide, bbox: tuple[int, int, int, int], block: ContentBloc
         return
     left, top, width, height = bbox
 
+    # Внешний контракт — список серий с фиксированными полями. Утилита
+    # вместимости по-прежнему работает со словарём; имена проверяет ChartData.
+    series_by_name = {series.name: series.values for series in block.chart.series}
     categories, series, _truncated = fit_chart_data(
-        block.chart.categories, block.chart.series, width
+        block.chart.categories, series_by_name, width
     )
 
     chart_data = CategoryChartData()
@@ -222,7 +271,7 @@ def _add_native_chart(slide, bbox: tuple[int, int, int, int], block: ContentBloc
 
     xl_chart_type = _CHART_TYPE_MAP[block.chart.chart_type.value]
     graphic_frame = slide.shapes.add_chart(xl_chart_type, left, top, width, height, chart_data)
-    style_chart(graphic_frame.chart, manifest)
+    style_chart(graphic_frame.chart, manifest, slide=slide)
 
 
 def _add_native_table(slide, bbox: tuple[int, int, int, int], block: ContentBlock, manifest: DesignManifest) -> None:

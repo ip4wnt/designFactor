@@ -13,6 +13,12 @@ def parse_variants(pptx_path):
     )
 
     variants = []
+    usage_by_layout = {}
+    for slide_index, slide in enumerate(presentation.slides):
+        key = str(slide.slide_layout.part.partname).lstrip("/")
+        usage_by_layout.setdefault(key, []).append(
+            _slide_usage_example(slide, slide_index)
+        )
 
     used_names = set()
     # presentation.slide_layouts exposes only layouts of the first master.
@@ -40,6 +46,9 @@ def parse_variants(pptx_path):
                 "slots_raw": parsed["text_shapes"],
                 "images_raw": parsed["images"],
                 "image_placeholders_raw": parsed["image_placeholders"],
+                "usage_examples_raw": usage_by_layout.get(
+                    str(layout.part.partname).lstrip("/"), []
+                ),
             })
 
     return variants
@@ -103,5 +112,30 @@ def parse_slide_variants(presentation):
             'slots_raw': parsed['text_shapes'],
             'images_raw': parsed['images'],
             'image_placeholders_raw': parsed['image_placeholders'],
+            'usage_examples_raw': [_usage_example_from_parsed(parsed, index)],
         })
     return variants
+
+
+def _slide_usage_example(slide, slide_index):
+    return _usage_example_from_parsed(parse_layout_shapes(slide), slide_index)
+
+
+def _usage_example_from_parsed(parsed, slide_index):
+    """Keep raw content internal; normalization exports only derived signals."""
+    return {
+        "slide_index": slide_index,
+        "text_shapes": [{
+            "placeholder_idx": shape.get("placeholder_idx"),
+            "placeholder_type": shape.get("placeholder_type"),
+            "text": shape.get("text") or "",
+            "x": shape.get("x"), "y": shape.get("y"),
+            "w": shape.get("w"), "h": shape.get("h"),
+        } for shape in parsed["text_shapes"]],
+        "image_shapes": [{
+            "placeholder_idx": shape.get("placeholder_idx"),
+            "x": shape.get("x"), "y": shape.get("y"),
+            "w": shape.get("w"), "h": shape.get("h"),
+        } for shape in parsed["images"] + parsed["image_placeholders"]],
+        "image_count": len(parsed["images"]) + len(parsed["image_placeholders"]),
+    }

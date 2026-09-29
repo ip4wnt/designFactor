@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     # None -> заголовок Authorization не отправляется (локальные Ollama/vLLM
     # без авторизации). Для облачного OpenAI-совместимого API впиши ключ сюда.
     LLM_API_KEY: str | None = None
+    # Общий дедлайн одного вызова LLM на этапе планирования (ContentPlan),
+    # секунды, включая повторы. Провайдеры на длинных бриф-планах иногда
+    # отвечают дольше минуты — при «Превышен общий дедлайн LLM» поднимай здесь.
+    LLM_PLANNING_TIMEOUT_S: float = 120.0
+    # Дедлайн LLM-правок по результатам аудита (audit_fix), секунды.
+    LLM_AUDIT_FIX_TIMEOUT_S: float = 45.0
 
     VLM_BASE_URL: str = "http://localhost:11434/v1"
     VLM_MODEL_NAME: str = "gpt-4o-mini"

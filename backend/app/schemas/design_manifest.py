@@ -36,6 +36,60 @@ class Layout(BaseModel):
     supports_image: bool = False
 
 
+class SlideElementType(str, Enum):
+    TEXT = "text"
+    PICTURE = "picture"
+    TABLE = "table"
+    CHART = "chart"
+    OTHER = "other"
+
+
+class SlideElement(BaseModel):
+    """Одна фигура на реальном слайде-образце — минимум, нужный для
+    отрисовки HTML-макетика в UI (позиционированный div на холсте слайда),
+    без рендера через LibreOffice.
+
+    x/y/width/height — EMU, та же единица что и slide_width_emu/
+    slide_height_emu на DesignManifest, поэтому фронтенд может отмасштабировать
+    напрямую делением на размеры слайда.
+    """
+
+    element_type: SlideElementType
+    x_emu: int
+    y_emu: int
+    width_emu: int
+    height_emu: int
+    text: str | None = None  # только для TEXT — реальный текст фигуры, обрезанный
+    fill_hex: str | None = None  # явный fill фигуры, если задан прямо на слайде
+    text_color_hex: str | None = None  # явный цвет текста первого run с текстом
+    font_size: int | None = None  # pt, первого run с текстом
+    bold: bool | None = None
+    is_title_role: bool = False  # фигура — плейсхолдер типа title/centerTitle
+    # Поля ниже — из доработки парсера коллеги (pptx_template_parser_generator):
+    # выравнивание текста внутри фигуры и метаданные картинки, нужные для более
+    # точной раскладки мокапов в UI и генератора.
+    horizontal_align: str | None = None  # left | center | right | justify | ...
+    vertical_align: str | None = None  # top | middle | bottom
+    margin_left_emu: int | None = None
+    margin_right_emu: int | None = None
+    margin_top_emu: int | None = None
+    margin_bottom_emu: int | None = None
+    picture_description: str | None = None  # alt-текст картинки (cNvPr/@descr), если задан автором шаблона
+
+
+class LayoutExample(BaseModel):
+    """Один реальный слайд-образец из презентации-шаблона, использующий
+    данный layout_id — не пустая заготовка макета, а то, как его фактически
+    заполнили автором шаблона (позиции, текст, цвета фигур). Обходятся ВСЕ
+    слайды-образцы, попавшие в этот layout — в шаблоне может быть много
+    примеров на один и тот же (особенно 'свободный дизайн') макет.
+    """
+
+    slide_index: int  # 1-based позиция в исходной презентации, для стабильной сортировки
+    slide_name: str | None = None
+    elements: list[SlideElement] = Field(default_factory=list)
+
+
 class Typography(BaseModel):
     title: TypographyStyle
     body: TypographyStyle
@@ -82,3 +136,7 @@ class DesignManifest(BaseModel):
     # как и раньше.
     table_style: TableStyleTokens | None = None
     chart_style: ChartStyleTokens | None = None
+    # layout_id -> список слайдов-образцов, использующих этот макет. Пусто
+    # для layout_id, на который в презентации не нашлось ни одного слайда-
+    # примера (только пустая заготовка макета в самом шаблоне).
+    layout_examples: dict[str, list[LayoutExample]] = Field(default_factory=dict)
