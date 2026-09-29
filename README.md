@@ -9,6 +9,8 @@
 
 Рабочая версия: **http://46.243.211.184/** (десктоп).
 
+Репозиторий на сорскрафте: https://sourcecraft.dev/lct-hackaton-2026/case-14-ai-presentation-designer-team-10?rev=main
+
 ---
 
 ## Что делает сервис
