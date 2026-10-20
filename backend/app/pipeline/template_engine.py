@@ -37,7 +37,6 @@ from pathlib import Path
 from typing import Any
 
 from pptx import Presentation
-from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.util import Emu, Pt
@@ -128,6 +127,7 @@ def build_template_json(pptx_path: str | Path) -> dict[str, Any]:
                 (v.get("composition") or {}).get("kind")
                 for v in template.get("variants") or []
                 if v.get("source") == "sample"
+                and ((v.get("composition") or {}).get("kind") != "chart" or (v.get("composition") or {}).get("chart_pictures"))
             }
             only_kinds = {"table", "chart", "statement"} - sample_kinds
             # Разделитель: если ни образцы, ни макеты шаблона не дают композицию
@@ -248,7 +248,7 @@ def _collect_layout_decor(template: dict[str, Any], path: Path) -> None:
                     continue
                 has_text = bool(getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip())
                 is_picture = "PICTURE" in str(shape.shape_type)
-                item: dict[str, Any] = {"x": round(x, 2), "y": round(y, 2), "w": round(w, 2), "h": round(h, 2), "text": has_text, "picture": is_picture}
+                item: dict[str, Any] = {"x": round(x, 2), "y": round(y, 2), "w": round(w, 2), "h": round(h, 2), "text": has_text, "picture": is_picture or shape.has_table, "table": shape.has_table}
                 if is_picture and w * h >= 0.75 * (int(prs.slide_width) / 360000) * (int(prs.slide_height) / 360000):
                     item.update(_picture_busyness(shape))
                 decor.append(item)
@@ -1035,19 +1035,40 @@ def _shorten(text: str, limit: int | None, max_lines: int | None = None, is_titl
             text = "\n".join(lines[:max_lines])
     if not limit or len(text) <= limit:
         return text
-    clipped = text[: limit + 1]
+    from app.pipeline.dramaturgy import strip_hanging  # noqa: PLC0415 — общий список висящих слов
+
+    # 1) целые предложения, если они дают хотя бы 40 % бюджета
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    kept, total = [], 0
+    for sentence in sentences:
+        if total + len(sentence) + (1 if kept else 0) > limit:
+            break
+        kept.append(sentence)
+        total += len(sentence) + (1 if total else 0)
+    if kept and len(sentences) > 1 and total >= limit * 0.4:
+        return " ".join(kept)
+    # 2) целая часть до запятой/тире/двоеточия, если она дает хотя бы половину бюджета
+    head = text[: limit + 1]
+    for sep in (" — ", " – ", ": ", "; ", ", "):
+        pos = head.rfind(sep)
+        if pos >= limit * 0.5:
+            clause = strip_hanging(head[:pos].strip()).rstrip(" ,;:.—-")
+            if clause:
+                return clause
+    # 3) по границе слова, без висящего предлога/связки/прилагательного на конце
+    clipped = head
     boundary = clipped.rfind(" ")
     if boundary >= max(4, limit // 2):
         clipped = clipped[:boundary]
     else:
         clipped = clipped[:limit]
     clipped = clipped.rstrip(" ,;:.—-")
+    words = clipped.split(" ")
     if is_title:
-        words = clipped.split(" ")
         while len(words) > 2 and (len(words[-1].strip("«»\"'")) <= 3 or words[-1] in {"—", "-"}):
             words.pop()
-        clipped = " ".join(words).rstrip(" ,;:.—-")
-    return clipped
+    clipped = strip_hanging(" ".join(words)).rstrip(" ,;:.—-")
+    return clipped or " ".join(words).rstrip(" ,;:.—-")
 
 
 _BODY_ROLES = ("body", "column_body")
@@ -1331,6 +1352,8 @@ def render_variant(
         _fit_slide_text(slide, variant, slide_plan)
         _remove_empty_placeholders(slide)
     _drop_unused_layouts(prs)
+    from app.pipeline.docx_tables import verify_rendered_tables
+    verify_rendered_tables(prs, content_plan, plan)
     prs.save(str(output_path))
     tmp_path.unlink(missing_ok=True)
 
@@ -1379,6 +1402,8 @@ def _render_mixed(
         prs.part.drop_rel(slide_id.rId)
         prs.slides._sldIdLst.remove(slide_id)
     _drop_unused_layouts(prs)
+    from app.pipeline.docx_tables import verify_rendered_tables
+    verify_rendered_tables(prs, content_plan, plan)
     prs.save(str(output_path))
 
 
@@ -1447,7 +1472,7 @@ def _slot_shape(slide, variant, slot_name):
 
 
 def _inject_objects(slide, variant, slide_plan, blocks: list[ContentBlock], manifest: DesignManifest, variant_key: str) -> None:
-    from app.pipeline.styling import style_chart, style_table
+    from app.pipeline.styling import style_table
 
     contract = variant["generation_contract"]["text_slots"]
     body_slots = [s["slot"] for s in contract if s["role"] in {"body", "column_body"}]
@@ -1496,12 +1521,8 @@ def _inject_objects(slide, variant, slide_plan, blocks: list[ContentBlock], mani
 
     left, top, width, height = bbox
     if block.type == ContentBlockType.CHART and block.chart is not None:
-        chart_data = CategoryChartData()
-        chart_data.categories = block.chart.categories
-        for series in block.chart.series:
-            chart_data.add_series(series.name, series.values)
-        frame = slide.shapes.add_chart(_CHART_TYPE_MAP[block.chart.chart_type.value], left, top, width, height, chart_data)
-        style_chart(frame.chart, manifest, slide=slide)
+        from app.pipeline.charts import add_chart
+        frame = add_chart(slide, block.chart, bbox, manifest, _CHART_TYPE_MAP)
     elif block.type == ContentBlockType.TABLE and block.table is not None:
         headers = block.table.headers[:5]
         rows = [r[:5] for r in block.table.rows[:7]]
@@ -1655,12 +1676,18 @@ def _title_overflow_allowed(template: dict[str, Any], plan: dict[str, Any], erro
         return bool(limit) and len(text) <= int(limit * 2.0) + 1
     if contract.get("role") in {"metric_value", "unit_number"} and "\n" not in text:
         return len(text) <= 24  # значение метрики целиком («150 млн»), кегль уменьшится до ширины бокса
+    if contract.get("role") in _SHRINKABLE_TEXT_ROLES:
+        return bool(limit) and len(text) <= int(limit * _TEXT_OVERFLOW_FACTOR) + 1  # фраза целиком, кегль уменьшится по высоте
     if contract.get("role") not in _TITLE_ROLES:
         return False
     return bool(limit) and len(text) <= int(limit * _TITLE_OVERFLOW_FACTOR) + 1
 
 
 _MIN_FIT_SCALE = 0.55
+# Подзаголовок/текст/подпись блока: вместо обрубка по бюджету символов — целая фраза
+# и уменьшение кегля по высоте слота (до _MIN_FIT_SCALE).
+_SHRINKABLE_TEXT_ROLES = {"subtitle", "presentation_subtitle", "subheading", "body", "column_body", "unit_text", "text"}
+_TEXT_OVERFLOW_FACTOR = 1.6
 
 
 def _fit_slide_text(slide, variant: dict[str, Any], slide_plan: dict[str, Any]) -> None:
@@ -1669,6 +1696,7 @@ def _fit_slide_text(slide, variant: dict[str, Any], slide_plan: dict[str, Any]) 
     или текст выше зоны слота, уменьшаем кегль всех ранов, но не ниже 55 %
     от исходного. Шрифт и цвет шаблона не трогаем."""
     slots = variant.get("slots") or {}
+    contract_limits = {t["slot"]: t for t in ((variant.get("generation_contract") or {}).get("text_slots") or []) if t.get("slot")}
     for slot_name, text in (slide_plan.get("content") or {}).items():
         if not isinstance(text, str) or not text.strip():
             continue
@@ -1717,11 +1745,13 @@ def _fit_slide_text(slide, variant: dict[str, Any], slide_plan: dict[str, Any]) 
                         for run in paragraph.runs:
                             run.font.size = Pt(size_pt)
         height = _available_height(slide, shape) if is_title else int(shape.height)
+        budget = ((contract_limits.get(slot_name) or {}).get("constraints") or {}).get("maximum_characters")
+        over_budget = role in _SHRINKABLE_TEXT_ROLES and bool(budget) and len(text) > budget
         if role in {"metric_value", "unit_number"} and "\n" not in text:
             # Значение метрики — одной строкой («150 млн», а не «150 / млн»): меряем как одно слово
             fitted = _fit_font_size(text.replace(" ", "\u00a0"), int(shape.width), height, float(size_pt), check_height=False)
         else:
-            fitted = _fit_font_size(text, int(shape.width), height, float(size_pt), check_height=is_title)
+            fitted = _fit_font_size(text, int(shape.width), height, float(size_pt), check_height=is_title or over_budget)
         if fitted is None or fitted >= size_pt - 0.5:
             continue
         for paragraph in shape.text_frame.paragraphs:

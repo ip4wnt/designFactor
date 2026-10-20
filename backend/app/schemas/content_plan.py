@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -24,13 +24,18 @@ class ChartType(str, Enum):
 
 class ChartSeries(StrictModel):
     name: str
-    values: list[float]
+    values: list[float | None]
 
 
 class ChartData(StrictModel):
     chart_type: ChartType
     categories: list[str]
     series: list[ChartSeries]
+    category_axis_title: str = Field(default="", description="Название категорий или временной оси из входных данных.")
+    value_axis_title: str = Field(default="", description="Название измеряемой величины из входных данных.")
+    units: str = Field(default="", description="Единицы измерения, только если известны из источника.")
+    source: str = Field(default="", max_length=300, description="Источник данных. Не выдумывай источник.")
+    orientation: Literal["auto", "vertical", "horizontal"] = "auto"
 
     @model_validator(mode="after")
     def validate_series(self) -> Self:
@@ -79,11 +84,23 @@ class ContentBlock(StrictModel):
 
 class SlideSpec(StrictModel):
     slide_id: str = Field(min_length=1)
+    source_table_id: str | None = Field(
+        default=None, description="ID доступной исходной таблицы из каталога; ячейки подставляет сервер. Иначе null.",
+    )
+    data_note: str = Field(default="", description="Происхождение и преобразования данных; заполняет сервер.")
     purpose: str
     title: str
     content_blocks: list[ContentBlock] = Field(
         default_factory=list,
         description="Обычно 1–2 разных блока. Не повторяй одинаковые блоки на слайде.",
+    )
+    why: str = Field(
+        default="",
+        description="Как этот слайд работает на цель презентации и раскрывает главную идею (до 200 знаков).",
+    )
+    data_gap: str = Field(
+        default="",
+        description="Пустая строка, если данных хватает; иначе «Нужны данные: …» — каких именно фактов нет.",
     )
 
 

@@ -75,6 +75,7 @@ def audit_presentation(
     manifest: DesignManifest | None = None,
     allowed_fonts: Iterable[str] | None = None,
     allowed_sizes: Iterable[float] | None = None,
+    expected_texts: Iterable[str] | None = None,
 ) -> list[AuditIssue]:
     """Все детерминированные проверки. `manifest` включает проверки категории
     TEMPLATE (шрифт/кегль/цвет из шаблона) — без него они пропускаются, а не
@@ -108,10 +109,12 @@ def audit_presentation(
 
     issues: list[AuditIssue] = []
     slide_texts: list[str] = []
+    expected = [re.sub(r"\s+", " ", t).strip() for t in (expected_texts or ()) if isinstance(t, str) and t.strip()]
 
     for slide_idx, slide in enumerate(prs.slides):
         slide_id = f"slide-{slide_idx + 1}"
         sw, sh = prs.slide_width, prs.slide_height
+        issues.extend(_check_truncated_text(slide, slide_id, sw, sh, expected))
         issues.extend(_check_bounds(slide, slide_id, sw, sh))
         issues.extend(_check_edge_margins(slide, slide_id, sw, sh))
         issues.extend(_check_overlap(slide, slide_id, sw, sh))
@@ -258,6 +261,9 @@ def _check_edge_margins(slide, slide_id: str, slide_width: int, slide_height: in
         ):
             continue
 
+        if _is_template_positioned(slide, shape):
+            continue  # фигура стоит там, где ее поставил дизайнер шаблона (макет/мастер) — это не ошибка сборки
+
         touches_left = shape.left < margin_x
         touches_right = (slide_width - (shape.left + shape.width)) < margin_x
         touches_top = shape.top < margin_y
@@ -282,6 +288,40 @@ def _check_edge_margins(slide, slide_id: str, slide_width: int, slide_height: in
                 )
             )
     return issues
+
+
+def _is_neutral_gray(color_hex: str) -> bool:
+    """Ахроматический серый (подписи, вторичный текст из образцов шаблона) — нейтраль,
+    а не нарушение палитры; палитру нарушают посторонние цветные оттенки."""
+    try:
+        r, g, b = (int(color_hex[i:i + 2], 16) for i in (0, 2, 4))
+    except (ValueError, IndexError):
+        return False
+    return max(r, g, b) - min(r, g, b) <= 10
+
+
+def _is_template_positioned(slide, shape, tolerance_emu: int = 45720) -> bool:
+    """Фигура повторяет геометрию плейсхолдера/фигуры макета или мастера шаблона
+    (с точностью до 0,05"): ее положение задано дизайнером шаблона, а не сборкой."""
+    try:
+        if getattr(shape, "is_placeholder", False):
+            try:
+                inherited = shape._base_placeholder  # noqa: SLF001 — плейсхолдер макета, от которого унаследована геометрия
+            except Exception:  # noqa: BLE001
+                inherited = None
+            if inherited is not None and None not in (inherited.left, inherited.top):
+                if abs(int(inherited.left) - int(shape.left)) <= tolerance_emu and abs(int(inherited.top) - int(shape.top)) <= tolerance_emu:
+                    return True
+        layout = slide.slide_layout
+        candidates = list(layout.shapes) + list(layout.slide_master.shapes)
+    except Exception:  # noqa: BLE001
+        return False
+    for other in candidates:
+        if None in (other.left, other.top):
+            continue
+        if abs(int(other.left) - int(shape.left)) <= tolerance_emu and abs(int(other.top) - int(shape.top)) <= tolerance_emu:
+            return True
+    return False
 
 
 def _check_overlap(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
@@ -338,6 +378,50 @@ def _rects_overlap(a, b) -> bool:
     ax0, ay0, ax1, ay1 = a.left, a.top, a.left + a.width, a.top + a.height
     bx0, by0, bx1, by1 = b.left, b.top, b.left + b.width, b.top + b.height
     return ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1
+
+
+_HANGING_TAIL_RE = re.compile(
+    r"(?:^|\s)(и|а|но|в|во|на|с|со|к|ко|о|об|от|до|за|из|у|по|под|при|про|для|без|над|через|между|или|что|как|не|ни|же|бы|ли"
+    r"|может|могут|будет|будут|должен|должна|должны|является|являются|позволяет|позволяют|чтобы|если|когда|который|которая|которые)$",
+    re.I,
+)
+
+
+def _check_truncated_text(slide, slide_id: str, slide_width: int, slide_height: int, expected: list[str]) -> list[AuditIssue]:
+    """Обрыв фразы на слайде: текст кончается предлогом/союзом/связкой («…разрывов и»)
+    или является началом более длинной фразы из плана, оборванным посреди
+    предложения. Это то, что зритель читает как ошибку, а XML-проверки не видят."""
+    issues = []
+    for shape in slide.shapes:
+        if not getattr(shape, "has_text_frame", False):
+            continue
+        for paragraph in shape.text_frame.paragraphs:
+            text = re.sub(r"\s+", " ", paragraph.text).strip().lstrip("•·-–— ")
+            if len(text) < 8 or len(text.split()) < 2:
+                continue
+            reason = ""
+            if _HANGING_TAIL_RE.search(text.rstrip(" ,;:—-")):
+                reason = f"обрывается на слове «{text.split()[-1]}»"
+            elif text[-1] not in ".!?…»\")" and len(text) > 45:
+                for full in expected:
+                    if len(full) >= len(text) + 4 and full.lower().startswith(text.lower()):
+                        nxt = full[len(text):len(text) + 2]
+                        if nxt[:1] == " " and nxt[1:2].isalpha():
+                            reason = "это начало более длинной фразы из плана, оборванное посреди предложения"
+                            break
+            if reason:
+                issues.append(
+                    _new_issue(
+                        slide_id,
+                        AuditCategory.CONTENT,
+                        f"Фраза «{text[:70]}{'…' if len(text) > 70 else ''}» {reason}",
+                        code="text_truncated",
+                        bbox=_shape_bbox(shape, slide_width, slide_height),
+                        shape=shape,
+                    )
+                )
+                break  # одно замечание на фигуру
+    return issues
 
 
 def _check_text_overflow(slide, slide_id: str, slide_width: int, slide_height: int) -> list[AuditIssue]:
@@ -562,13 +646,18 @@ def _check_template_conformance(
 
                 if run.font.size is not None and not reported_size_mismatch:
                     size_pt = run.font.size.pt
-                    if not any(abs(size_pt - allowed) <= _FONT_SIZE_TOLERANCE_PT for allowed in allowed_sizes):
+                    # Кегль внутри диапазона шкалы шаблона (например 21pt после shrink-to-fit
+                    # между 18 и 24) — это тот же типографический строй; замечание только
+                    # для кегля меньше минимального или больше максимального в шаблоне.
+                    scale_min, scale_max = (min(allowed_sizes), max(allowed_sizes)) if allowed_sizes else (0.0, 0.0)
+                    off_scale = allowed_sizes and (size_pt < scale_min - _FONT_SIZE_TOLERANCE_PT or size_pt > scale_max + _FONT_SIZE_TOLERANCE_PT)
+                    if off_scale:
                         issues.append(
                             _new_issue(
                                 slide_id,
                                 AuditCategory.TEMPLATE,
-                                f"Кегль {size_pt:.0f}pt не входит в типографическую шкалу шаблона "
-                                f"({', '.join(f'{s:.0f}pt' for s in sorted(allowed_sizes))})",
+                                f"Кегль {size_pt:.0f}pt вне типографической шкалы шаблона "
+                                f"({scale_min:.0f}–{scale_max:.0f}pt)",
                                 code="font_size_off_scale",
                                 bbox=_shape_bbox(shape, slide_width, slide_height),
                     shape=shape,
@@ -579,7 +668,7 @@ def _check_template_conformance(
                 try:
                     if run.font.color.type is not None and run.font.color.rgb is not None and not reported_color_mismatch:
                         color_hex = str(run.font.color.rgb).upper()
-                        if color_hex not in allowed_colors:
+                        if color_hex not in allowed_colors and not _is_neutral_gray(color_hex):
                             issues.append(
                                 _new_issue(
                                     slide_id,
@@ -712,11 +801,23 @@ def _check_fill_ratio(slide, slide_id: str, slide_width: int, slide_height: int)
     if slide_area <= 0 or _is_structural_slide(slide):
         return []
 
-    covered = 0
+    # Площадь считаем как объединение прямоугольников (сетка 120×68), а не сумму:
+    # карточка-подложка с графиком и текстом внутри — это один раз занятая область.
+    cols, rows = 120, 68
+    grid = bytearray(cols * rows)
     for shape in slide.shapes:
         if None in (shape.left, shape.top, shape.width, shape.height):
             continue
-        covered += max(shape.width, 0) * max(shape.height, 0)
+        area = max(shape.width, 0) * max(shape.height, 0)
+        if area >= slide_area * 0.85 or (area >= slide_area * 0.5 and _is_template_positioned(slide, shape)):
+            continue  # фоновая подложка/декор шаблона на весь слайд — не «заполненность» контентом
+        x0 = max(0, int(shape.left / slide_width * cols)); x1 = min(cols, int((shape.left + shape.width) / slide_width * cols + 0.999))
+        y0 = max(0, int(shape.top / slide_height * rows)); y1 = min(rows, int((shape.top + shape.height) / slide_height * rows + 0.999))
+        for y in range(y0, y1):
+            base = y * cols
+            for x in range(x0, x1):
+                grid[base + x] = 1
+    covered = sum(grid) / (cols * rows) * slide_area
 
     ratio = min(covered / slide_area, 1.0)
     if ratio < _MIN_FILL_RATIO:

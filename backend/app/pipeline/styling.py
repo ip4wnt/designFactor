@@ -76,6 +76,20 @@ def accent_colors(manifest: DesignManifest) -> list[RGBColor]:
     return colors
 
 
+def contrast_palette(colors: list[RGBColor], dark: bool) -> list[RGBColor]:
+    """Убирает из палитры серий цвета, сливающиеся с фоном слайда: почти белые на светлом
+    фоне и почти черные на темном (иначе серия «Факт» белым по белому невидима).
+    Порядок остальных цветов сохраняется; если отфильтровалось все — безопасный набор темы."""
+    if dark:
+        kept = [c for c in colors if _relative_luminance(c) >= 0.12]
+    else:
+        kept = [c for c in colors if _relative_luminance(c) <= 0.72]
+    if kept:
+        return kept
+    fallback = ("4472C4", "ED7D31", "A5A5A5", "FFC000", "5B9BD5", "70AD47")
+    return [_hex_to_rgbcolor(c) for c in fallback]
+
+
 def style_table(table, manifest: DesignManifest) -> None:
     """Красит нативную python-pptx таблицу в стиле темы: шапка + чередование строк.
 
@@ -295,6 +309,8 @@ def style_chart(chart, manifest: DesignManifest, dark: bool | None = None, slide
     """
     colors = accent_colors(manifest)
     plot = chart.plots[0]
+    chart_kind = str(chart.chart_type)
+    is_pie = "PIE" in chart_kind or "DOUGHNUT" in chart_kind
     if dark is None and slide is not None:
         try:
             dark = slide_is_dark(slide)
@@ -307,6 +323,7 @@ def style_chart(chart, manifest: DesignManifest, dark: bool | None = None, slide
     if not dark and _relative_luminance(text_color) > 0.5:
         text_color = RGBColor(0x1B, 0x1B, 0x1F)
     grid_color = RGBColor(0x5A, 0x5F, 0x6B) if dark else RGBColor(0xD0, 0xD4, 0xDC)
+    colors = contrast_palette(colors, dark)
 
     for series_idx, series in enumerate(plot.series):
         color = colors[series_idx % len(colors)]
@@ -320,6 +337,16 @@ def style_chart(chart, manifest: DesignManifest, dark: bool | None = None, slide
                 series.format.line.width = Pt(2.25)
             except (AttributeError, TypeError):
                 pass
+
+    # Lines need an explicit stroke even when their fill API succeeds.
+    for series_idx, series in enumerate(plot.series):
+        if "LINE" in chart_kind:
+            series.format.line.color.rgb = colors[series_idx % len(colors)]
+            series.format.line.width = Pt(2.25)
+        if is_pie:
+            for point_idx, point in enumerate(series.points):
+                point.format.fill.solid()
+                point.format.fill.fore_color.rgb = colors[point_idx % len(colors)]
 
     chart_font_name = (
         (manifest.chart_style.font if manifest.chart_style else None) or manifest.typography.body.font
@@ -337,7 +364,7 @@ def style_chart(chart, manifest: DesignManifest, dark: bool | None = None, slide
 
     # Легенда: снизу, контрастная; для одной серии не нужна
     try:
-        if len(list(plot.series)) <= 1:
+        if len(list(plot.series)) <= 1 and not is_pie:
             chart.has_legend = False
         else:
             from pptx.enum.chart import XL_LEGEND_POSITION
@@ -371,14 +398,18 @@ def style_chart(chart, manifest: DesignManifest, dark: bool | None = None, slide
     try:
         from pptx.enum.chart import XL_LABEL_POSITION
 
-        plot.has_data_labels = True
+        plot.has_data_labels = len(plot.categories) <= 12
         labels = plot.data_labels
-        labels.show_value = True
+        labels.show_value = not is_pie
+        labels.show_percentage = is_pie
+        labels.show_category_name = False
         labels.font.name = chart_font_name
         labels.font.size = Pt(base_size + 2)
         labels.font.bold = True
         labels.font.color.rgb = text_color
-        labels.number_format = "#,##0.##"
+        numeric_values = [value for series in plot.series for value in series.values if value is not None]
+        integer_values = all(float(value).is_integer() for value in numeric_values)
+        labels.number_format = "0%" if is_pie else ("#,##0" if integer_values else "#,##0.00")
         labels.number_format_is_linked = False
         chart_type = str(getattr(chart, "chart_type", ""))
         if "LINE" in chart_type:
@@ -389,6 +420,22 @@ def style_chart(chart, manifest: DesignManifest, dark: bool | None = None, slide
             labels.position = XL_LABEL_POSITION.OUTSIDE_END
     except Exception:  # noqa: BLE001
         pass
+    from pptx.oxml.xmlchemy import OxmlElement
+
+    blanks = chart._chartSpace.find("{http://schemas.openxmlformats.org/drawingml/2006/chart}chart")
+    setting = blanks.find("{http://schemas.openxmlformats.org/drawingml/2006/chart}dispBlanksAs")
+    if setting is None:
+        setting = OxmlElement("c:dispBlanksAs")
+        following = blanks.find("{http://schemas.openxmlformats.org/drawingml/2006/chart}showDLblsOverMax")
+        if following is not None:
+            following.addprevious(setting)
+        else:
+            blanks.append(setting)
+    setting.set("val", "gap")
+    if "COLUMN" in chart_kind or "BAR" in chart_kind:
+        values = [v for series in plot.series for v in series.values if v is not None]
+        if values and min(values) >= 0:
+            chart.value_axis.minimum_scale = 0
     # Линейный график: точки-маркеры на узлах
     try:
         if "LINE" in str(getattr(chart, "chart_type", "")):

@@ -1,0 +1,23 @@
+# Send only runtime sources; secrets, notebooks, venv and generated decks
+# must not enter the image or even its build context.
+**
+!Dockerfile
+!backend/
+!backend/requirements.txt
+!backend/app/
+!backend/app/**
+!backend/skills/
+!backend/skills/**
+!frontend/
+!frontend/**
+!pptx_template_parser_generator/
+!pptx_template_parser_generator/pptx_template_parser/
+!pptx_template_parser_generator/pptx_template_parser/**
+!pptx_template_parser_generator/prompts/
+!pptx_template_parser_generator/prompts/**
+!pptx_template_parser_generator/scripts/
+!pptx_template_parser_generator/scripts/**
+**/__pycache__/
+**/*.pyc
+**/.env
+**/.env.*

@@ -14,7 +14,6 @@ import logging
 import math
 from typing import Any
 
-from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
@@ -533,20 +532,11 @@ def render_library_slide(prs, template, variant, slide_plan, blocks, manifest, l
             except Exception:  # noqa: BLE001
                 logger.exception("Не удалось стилизовать таблицу")
     if kind == "chart" and chart_blocks:
-        from app.pipeline.styling import style_chart
+        from app.pipeline.charts import add_chart
         block = chart_blocks[0].chart
-        data = CategoryChartData()
-        data.categories = block.categories
-        for series in block.series:
-            data.add_series(series.name, series.values)
         chart_w = width * (0.63 if content.get("body") else 1.0)
-        frame = slide.shapes.add_chart(chart_type_map[block.chart_type.value], Cm(left), Cm(top), Cm(chart_w), Cm(height), data)
+        frame = add_chart(slide, block, (Cm(left), Cm(top), Cm(chart_w), Cm(height)), manifest, chart_type_map)
         frame.name = "chart"
-        if manifest is not None:
-            try:
-                style_chart(frame.chart, manifest, slide=slide)
-            except Exception:  # noqa: BLE001
-                logger.exception("Не удалось стилизовать график")
     return slide
 
 

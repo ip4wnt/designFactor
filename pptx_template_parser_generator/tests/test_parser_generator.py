@@ -870,3 +870,44 @@ class BackgroundTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SlotEdgeToleranceTest(unittest.TestCase):
+    """Слот, выступающий за край слайда на величину округления, не роняет сборку."""
+
+    def test_validate_slot_tolerates_rounding(self):
+        from scripts.generate import validate_slot
+        slot = {"x": 29.23, "y": 13.4, "w": 4.66, "h": 5.65}
+        self.assertTrue(validate_slot(slot, 33.87, 19.05))
+        self.assertFalse(validate_slot({"x": 36.2, "y": 4.44, "w": 1.0, "h": 1.0}, 33.87, 19.05))
+
+    def test_clamp_slot_keeps_slot_inside_slide(self):
+        from scripts.generate import clamp_slot
+        clamped = clamp_slot({"x": 29.23, "y": 13.4, "w": 4.66, "h": 5.65}, 33.87, 19.05)
+        self.assertEqual(clamped["x"], 29.23)
+        self.assertAlmostEqual(clamped["x"] + clamped["w"], 33.87, places=2)
+        self.assertEqual(clamped["h"], 5.65)
+        self.assertIsNone(clamp_slot({"x": 36.2, "y": 4.44, "w": 0.0, "h": 0.0}, 33.87, 19.05))
+
+    def test_text_box_on_edge_slot_is_created(self):
+        from pptx import Presentation
+        from pptx.util import Cm
+        from scripts.generate import add_textbox
+        template = {
+            "slide_size": {"width": 33.87, "height": 19.05, "unit": "cm"},
+            "text_box_defaults": {"margins": {"left": 0.25, "right": 0.25, "top": 0.13, "bottom": 0.13}},
+        }
+        prs = Presentation()
+        prs.slide_width = Cm(33.87)
+        prs.slide_height = Cm(19.05)
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slot = {
+            "x": 29.23, "y": 13.4, "w": 4.66, "h": 5.65,
+            "horizontal_align": "left", "vertical_align": "middle",
+            "font": {"family": "Calibri", "size": 18.0, "weight": "regular"},
+            "margins": {"left": 0.25, "right": 0.25, "top": 0.13, "bottom": 0.13},
+        }
+        add_textbox(slide, "Текст", "text", slot, template)
+        box = slide.shapes[-1]
+        self.assertLessEqual(box.left + box.width, prs.slide_width)
+        self.assertEqual(box.text_frame.text, "Текст")

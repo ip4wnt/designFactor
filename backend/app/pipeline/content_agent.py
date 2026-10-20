@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from app.config import get_settings
 from app.llm_client import LLMClient
+from app.pipeline.plan_repair import repair_loop
 from app.schemas.content_plan import ContentPlan
 
 logger = logging.getLogger(__name__)
@@ -112,5 +113,24 @@ async def generate_content_plan(
                 )
         else:
             raise RuntimeError("Модель не вернула план содержания в формате JSON") from last_error
+
+        async def request_fix(feedback: str) -> ContentPlan:
+            return await client.chat_structured(
+                system_prompt=skill.system_prompt,
+                user_input=user_prompt + feedback,
+                output_model=ContentPlan,
+                reasoning_effort="none",
+                max_completion_tokens=min(8192, 1024 + 512 * max(slide_count, slide_count_max or 0)),
+            )
+
+        plan = await repair_loop(
+            plan,
+            as_plan=lambda candidate: candidate,
+            request_fix=request_fix,
+            slide_count=slide_count,
+            slide_count_max=slide_count_max,
+            rounds=settings.PLAN_REPAIR_ROUNDS,
+            timeout=settings.PLAN_REPAIR_TIMEOUT_S,
+        )
 
     return plan

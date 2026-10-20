@@ -26,7 +26,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from pptx import Presentation
-from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN
@@ -43,7 +42,7 @@ from app.pipeline.layout_engine import (
     title_zone,
     zone_bbox_emu,
 )
-from app.pipeline.styling import style_body_textbox, style_chart, style_table, style_title_textbox
+from app.pipeline.styling import style_body_textbox, style_table, style_title_textbox
 from app.schemas.content_plan import ContentBlock, ContentBlockType, ContentPlan, SlideSpec
 from app.schemas.design_manifest import DesignManifest
 
@@ -264,14 +263,15 @@ def _add_native_chart(slide, bbox: tuple[int, int, int, int], block: ContentBloc
         block.chart.categories, series_by_name, width
     )
 
-    chart_data = CategoryChartData()
-    chart_data.categories = categories
-    for series_name, values in series.items():
-        chart_data.add_series(series_name, values)
+    from app.pipeline.charts import add_chart
+    from app.schemas.content_plan import ChartSeries
 
-    xl_chart_type = _CHART_TYPE_MAP[block.chart.chart_type.value]
-    graphic_frame = slide.shapes.add_chart(xl_chart_type, left, top, width, height, chart_data)
-    style_chart(graphic_frame.chart, manifest, slide=slide)
+    prepared = block.chart.model_copy(update={
+        "categories": categories,
+        "series": [ChartSeries(name=name, values=values) for name, values in series.items()],
+    })
+    add_chart(slide, prepared, bbox, manifest, _CHART_TYPE_MAP)
+
 
 
 def _add_native_table(slide, bbox: tuple[int, int, int, int], block: ContentBlock, manifest: DesignManifest) -> None:

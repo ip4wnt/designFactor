@@ -144,7 +144,15 @@ def catalog_compositions(template: dict[str, Any]) -> list[dict[str, Any]]:
     sh = float((template.get("slide_size") or {}).get("height") or 0)
     for variant in template.get("variants") or []:
         source = variant.get("source") or "layout"
+        if source == "layout" and any(art.get("table") for art in variant.get("decor") or []):
+            continue  # A table inherited from the layout cannot be filled as ordinary text.
         slots = variant.get("slots") or {}
+        if source == "sample" and (variant.get("composition") or {}).get("kind") == "cards" and any(
+            s.get("semantic_role") == "unit_title"
+            and re.fullmatch(r"\d[\d\s.,]*\s*[+%]?", (s.get("template_text") or "").strip())
+            for s in slots.values()
+        ):
+            continue  # Numeric display fields misclassified as cards cannot hold text headings.
         if source == "layout" and sw and sh and any(
             float(s.get("x") or 0) < -0.2 or float(s.get("y") or 0) < -0.2
             or float(s.get("x") or 0) + float(s.get("w") or 0) > sw + 0.2
@@ -223,7 +231,7 @@ def split_kicker(title: str) -> tuple[str, str]:
 
 
 def is_section_slide(index: int, spec, total: int) -> bool:
-    if index == 0 or index == total - 1:
+    if index == 0 or index == total - 1 or spec.source_table_id:
         return False
     purpose = (spec.purpose or "").strip().lower()
     return purpose.startswith("раздел") or (not _bullets(spec) and not _texts(spec) and not _has(spec, ContentBlockType.TABLE) and not _has(spec, ContentBlockType.CHART))
@@ -424,7 +432,7 @@ def structure_content(content_plan: ContentPlan, brief: str, model) -> list[dict
     return result
 
 
-def restructure_slide(content_plan: ContentPlan, brief: str, model, index: int, previous: dict[str, Any] | None = None) -> dict[str, Any]:
+def restructure_slide(content_plan: ContentPlan, brief: str, model, index: int, previous: dict[str, Any] | None = None, instruction: str = "") -> dict[str, Any]:
     """Переписать тексты одного слайда (ручная доработка пользователя).
     Возвращает новую структуру слайда; при ошибке модели — детерминированный
     запасной вариант."""
@@ -448,6 +456,8 @@ def restructure_slide(content_plan: ContentPlan, brief: str, model, index: int, 
             lines.append(f"  • {item.get('head', '')} — {item.get('text', '')}")
         if previous.get("body"):
             lines.append(f"  body: {previous['body']}")
+    if instruction.strip():
+        lines += ["", f"ПОЖЕЛАНИЕ АВТОРА (выполни в первую очередь): {instruction.strip()}"]
     try:
         response = model.json(_structure_system() + _rewrite_hint(), "\n".join(lines), temperature=float(_skill_param("rewrite_temperature", 0.8)))
         for item in response.get("slides") or []:
@@ -497,22 +507,54 @@ def _clean(value) -> str:
 
 
 def _head_of(text: str, max_words: int = 4) -> str:
-    text = text.strip().rstrip(".")
-    for sep in (":", " — ", " – ", ". "):
+    """Короткий заголовок тезиса. Целая короткая фраза лучше обрубка: предложение
+    до 9 слов и 64 знаков остается как есть; иначе берем часть до разделителя,
+    и только потом — первые слова, без висящих предлогов, глаголов-связок и
+    прилагательных без существительного («…эффективность текущей»)."""
+    text = re.sub(r"\s+", " ", text.strip()).rstrip(".")
+    words = text.split()
+    if len(words) <= max(max_words, 9) and len(text) <= 64 and not re.search(r"[.!?]\s", text):
+        return text.rstrip(",;:—-")
+    for sep in (":", " — ", " – ", ". ", ", "):
         if sep in text:
             head = text.split(sep, 1)[0].strip()
-            if 1 <= len(head.split()) <= 6:
-                return head
-    words = text.split()
+            if 1 <= len(head.split()) <= 7 and (sep != ", " or len(head.split()) >= 2):
+                return strip_hanging(head).rstrip(",;:—-") or head
     cut = words[:max_words]
-    # Обрезанный заголовок не должен кончаться предлогом/союзом («Документы и задачи в»)
-    while len(cut) > 1 and _HANGING_WORD_RE.match(cut[-1]):
-        cut.pop()
-    head = " ".join(cut)
-    return head.rstrip(",;:—-")
+    head = strip_hanging(" ".join(cut))
+    return (head or " ".join(cut)).rstrip(",;:—-")
 
 
-_HANGING_WORD_RE = re.compile(r"^(и|а|но|в|во|на|с|со|к|ко|о|об|обо|от|до|за|из|у|по|под|при|про|для|без|над|через|или|что|как|не|ни|же|бы|ли)$", re.I)
+_SHRINKABLE_ROLES = {"subtitle", "presentation_subtitle", "subheading", "body", "column_body", "unit_text", "text"}
+
+_HANGING_WORD_RE = re.compile(
+    r"^(и|а|но|в|во|на|с|со|к|ко|о|об|обо|от|до|за|из|у|по|под|при|про|для|без|над|через|между|или|что|как|не|ни|же|бы|ли"
+    r"|может|могут|будет|будут|должен|должна|должны|стал|стала|стали|есть|был|была|были|является|являются"
+    r"|позволяет|позволяют|обеспечивает|требует|требуют|также|уже|еще|ещё|очень|более|менее|самый|самая|самые"
+    r"|который|которая|которые|чтобы|если|когда|где|то|это|их|его|ее|её|наш|наша|наши|свой|своя|свои|всех|всей|всего)$",
+    re.I,
+)
+# Прилагательное/причастие без существительного в конце обрубка: «эффективность текущей», «рост годовой»
+_TRAILING_ADJECTIVE_RE = re.compile(
+    r"\w{3,}(ущей|ющей|ащей|ящей|ущий|ющий|ащий|ящий|ущая|ющая|ащая|ящая|ский|ская|ское|ские|ской|ческий|ческая|ческие"
+    r"|ный|ная|ное|ные|ного|ному|ным|ную|ных|ными|ной|овый|овая|овое|овые|овой|евый|евая|евой|ивый|ивая|ивой"
+    r"|ительный|ительная|ительной|тельный|тельная|тельной)$",
+    re.I,
+)
+
+
+def strip_hanging(phrase: str) -> str:
+    """Снимает с конца фразы висящие слова: предлоги, союзы, связки, одинокие прилагательные."""
+    words = phrase.split()
+
+    def hanging(word: str) -> bool:
+        token = word.strip("«»\"'()")
+        # число без того, к чему оно относится («…за 12»), — тоже обрубок
+        return bool(_HANGING_WORD_RE.match(token) or _TRAILING_ADJECTIVE_RE.match(token) or re.fullmatch(r"\d+([.,]\d+)?", token))
+
+    while len(words) > 1 and hanging(words[-1]):
+        words.pop()
+    return " ".join(words)
 
 
 def _tail_of(text: str) -> str:
@@ -648,6 +690,8 @@ def select_compositions(
             limit = max(limit, insist)
         n_target = min(n_items, limit) if n_items else 0
         candidate_kinds = list(dict.fromkeys(intent["kinds"] + _COMPATIBLE.get(wanted, []) + ["text", "cards", "title_only"]))
+        if spec.source_table_id:
+            candidate_kinds = ["chart" if any(block.chart is not None for block in spec.content_blocks) else "table"]
         chosen = None
         scored: list[tuple[float, int, dict[str, Any]]] = []
         for rank, kind in enumerate(candidate_kinds):
@@ -670,6 +714,8 @@ def select_compositions(
             scored.sort(key=lambda item: (item[0], item[1]))
             chosen = scored[0][2]
         if chosen is None:
+            if spec.source_table_id:
+                raise ValueError("В шаблоне нет подходящей композиции для исходной таблицы")
             chosen = comps[0]
         units = 0
         if chosen.get("max_units"):
@@ -869,6 +915,8 @@ def fill_slots(
         elif is_title and limit and slots.get(name, {}).get("semantic_role") == "unit_title":
             limit = int(limit * 1.8)  # заголовок блока: кегль уменьшится до места под ним (валидатор допускает 2×)
             lines = None
+        elif limit and slots.get(name, {}).get("semantic_role") in _SHRINKABLE_ROLES:
+            limit = int(limit * 1.6)  # подзаголовок/текст: целая фраза важнее бюджета, кегль уменьшится (валидатор допускает 1.6×)
         role = slots.get(name, {}).get("semantic_role")
         if role in {"contact_text", "speaker_name", "url", "date"} and limit and " " not in text.split(" · ")[0]:
             content[name] = text  # e-mail/ссылку не режем — рендер уменьшит кегль
@@ -887,6 +935,9 @@ def fill_slots(
     if index == total - 1 and kind in {"closing", "qa", "cta"}:
         title = struct.get("title") or "Спасибо за внимание"
     subtitle = struct.get("subtitle") or ""
+    if _is_service_phrase(subtitle):
+        # «Финал и призыв к действию», «Заключительный слайд» — описание роли слайда, не текст для зрителя
+        subtitle = _first_sentences(struct.get("body") or "", 1) if kind in {"closing", "qa", "cta", "cover"} else ""
     contacts = _contacts_from_brief(brief)
     items = list(struct.get("items") or [])
     if intent.get("agenda") is not None:
@@ -970,6 +1021,10 @@ def fill_slots(
                     # у метрики подпись обязательна в любой плотности («20%» само по себе ни о чём)
                     if (profile["unit_text"] or metric_cards) and item["text"]:
                         text = item["text"]
+                    elif item["text"]:
+                        # лаконичный вариант: одно короткое предложение, но карточка с пустым телом
+                        # под заголовком выглядит сломанной — не оставляем ее пустой
+                        text = shorten(_first_sentences(item["text"], 1), 90, None)
                 elif profile["unit_text"] and item["text"]:
                     text = item["text"] if item["text"].lower().startswith(item["head"].lower()) else f"{item['head']}. {item['text']}"
                 else:
@@ -1105,6 +1160,21 @@ def _fit_contacts(text: str, contract_slot: dict[str, Any] | None) -> str:
         if len(candidate) <= limit:
             out.append(part)
     return " · ".join(out) if out else parts[0]
+
+
+_SERVICE_PHRASE_RE = re.compile(
+    r"(финал\w*|призыв\w* к действ|заключительн\w+|титульн\w+|обложк\w*|разделител\w*|слайд\w*|переход\w* к|подвед\w+ итог"
+    r"|благодарност\w*|контакт\w+ и вопрос|вопросы и ответы|q&a|cta)",
+    re.I,
+)
+
+
+def _is_service_phrase(text: str) -> bool:
+    """Короткая фраза, описывающая роль слайда («Финал и призыв к действию»), а не его содержание."""
+    text = (text or "").strip()
+    if not text or len(text.split()) > 7:
+        return False
+    return bool(_SERVICE_PHRASE_RE.search(text)) and not re.search(r"\d", text)
 
 
 def _first_sentences(text: str, count: int) -> str:

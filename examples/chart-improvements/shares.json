@@ -1,0 +1,21 @@
+{
+  "type": "chart",
+  "chart": {
+    "chart_type": "pie",
+    "categories": [
+      "Продукт A",
+      "Продукт B",
+      "Продукт C"
+    ],
+    "series": [
+      {
+        "name": "Продажи",
+        "values": [
+          55,
+          30,
+          15
+        ]
+      }
+    ]
+  }
+}

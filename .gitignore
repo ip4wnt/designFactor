@@ -15,4 +15,4 @@ uv.lock
 
 src/case_14_ai_presentation_designer_team_10/__init__.py
 notebooks/*
-/backend/tests/
+.pytest_cache/

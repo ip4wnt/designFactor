@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -19,8 +20,20 @@ class Settings(BaseSettings):
     # секунды, включая повторы. Провайдеры на длинных бриф-планах иногда
     # отвечают дольше минуты — при «Превышен общий дедлайн LLM» поднимай здесь.
     LLM_PLANNING_TIMEOUT_S: float = 120.0
+    # Сколько раз просить модель исправить план, нарушающий правила промпта
+    # (app/pipeline/plan_validator.py). Каждая правка — ещё один вызов LLM
+    # (не дольше PLAN_REPAIR_TIMEOUT_S); 0 отключает проверку-правку.
+    PLAN_REPAIR_ROUNDS: int = 1
+    # Сколько секунд ждать ответ на запрос правки; не уложилась — остаётся исходный план.
+    PLAN_REPAIR_TIMEOUT_S: float = 60.0
     # Дедлайн LLM-правок по результатам аудита (audit_fix), секунды.
     LLM_AUDIT_FIX_TIMEOUT_S: float = 45.0
+    TABLE_SUMMARY_TIMEOUT_S: float = 20.0
+    TABLE_ANALYSIS_ENABLED: bool = True
+    TABLE_ANALYSIS_TIMEOUT_S: float = Field(default=150.0, gt=0, le=300)
+    TABLE_ANALYSIS_MAX_TURNS: int = Field(default=14, ge=1, le=20)
+    TABLE_ANALYSIS_MAX_TOOL_CALLS: int = Field(default=20, ge=1, le=40)
+    TABLE_ANALYSIS_MAX_RESULTS: int = Field(default=3, ge=1, le=10)
     # Сколько тяжёлых стадий (разбор шаблона + сборка трёх вариантов, пересборка,
     # аудит с рендером) выполняется одновременно. Остальные задачи ждут в
     # статусе queued. Ориентир — ~3 ГБ памяти на задачу: на VM с 2 ГБ без

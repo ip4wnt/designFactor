@@ -29,7 +29,17 @@ class PreviewError(RuntimeError):
     pass
 
 
+_LOCKS: dict[str, asyncio.Lock] = {}
+
+
 async def render_variant_previews(pptx_path: str | Path, cache_dir: str | Path) -> list[Path]:
+    """Один рендер на каталог кэша: параллельные запросы картинок ждут друг друга."""
+    lock = _LOCKS.setdefault(str(cache_dir), asyncio.Lock())
+    async with lock:
+        return await _render_variant_previews(pptx_path, cache_dir)
+
+
+async def _render_variant_previews(pptx_path: str | Path, cache_dir: str | Path) -> list[Path]:
     """Возвращает пути к PNG-файлам (по одному на слайд) для указанного .pptx.
 
     Кэш валиден, пока mtime .pptx не изменился (после fix/rerun_assembly

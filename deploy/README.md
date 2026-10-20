@@ -13,6 +13,30 @@
 | 4. earlyoom | `earlyoom.default` → `/etc/default/earlyoom` | при свободной памяти < 5 % убивает самый крупный процесс за миллисекунды, предпочитая soffice/uvicorn и не трогая sshd/nginx |
 | 5. Самопроверка | `designfactor-healthcheck.{sh,service,timer}` | раз в минуту `curl /docs`; три неответа подряд → `systemctl restart designfactor`; в журнал пишется `free -m` |
 
+## Новый сервер с нуля (одной командой)
+
+Чистая Ubuntu 24.04, 4+ ГБ RAM. С рабочего компьютера (из корня репозитория):
+
+```bash
+git archive --format=tar.gz -o designfactor.tar.gz HEAD
+scp designfactor.tar.gz root@IP_СЕРВЕРА:/root/
+```
+
+На сервере:
+
+```bash
+mkdir -p /opt/designfactor && tar -xzf /root/designfactor.tar.gz -C /opt/designfactor
+bash /opt/designfactor/deploy/setup-server.sh
+nano /opt/designfactor/backend/.env      # LLM_API_KEY и VLM_API_KEY
+systemctl restart designfactor
+```
+
+Скрипт сам подбирает `MemoryHigh/MemoryMax`, `JOB_CONCURRENCY` и swap под объём
+RAM, ставит nginx (`nginx-designfactor.conf`, порт 80 → `127.0.0.1:8811`;
+интерфейс раздаёт сам backend). HTTPS при наличии домена:
+`apt install certbot python3-certbot-nginx && certbot --nginx -d ВАШ_ДОМЕН`.
+Инструкция ниже — то же самое по шагам (так развёрнут текущий прод).
+
 ## Установка
 
 ```bash
@@ -59,6 +83,8 @@ RAM, `JOB_CONCURRENCY` ≈ RAM / 3 ГБ (не меньше 1), swap — 25 % RAM
 
 nginx: статика `frontend/` из `/var/www/designfactor/`, proxy `/jobs|/templates|/excel|/docs|/openapi.json|/redoc`
 на `127.0.0.1:8811`, `client_max_body_size 200M`, в proxy-location —
-`proxy_read_timeout 300s; proxy_send_timeout 300s;` (превью и экспорт ждут
+`proxy_read_timeout 300s; proxy_send_timeout 300s;` и на уровне server —
+`client_body_timeout 300s;` (загрузка шаблона до 200 МБ с медленного канала;
+иначе nginx отвечает 408, а backend запроса вообще не видит); (превью и экспорт ждут
 очереди LibreOffice; при нескольких одновременных задачах рендер идёт дольше
 стандартных 60 с и без этого клиент получает 504, хотя backend работает).

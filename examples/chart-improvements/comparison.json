@@ -1,0 +1,21 @@
+{
+  "type": "chart",
+  "chart": {
+    "chart_type": "bar",
+    "categories": [
+      "Москва",
+      "Казань",
+      "Самара"
+    ],
+    "series": [
+      {
+        "name": "Продажи",
+        "values": [
+          120,
+          90,
+          65
+        ]
+      }
+    ]
+  }
+}

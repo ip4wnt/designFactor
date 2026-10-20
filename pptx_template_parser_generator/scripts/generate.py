@@ -178,23 +178,60 @@ def text_fits(
 # ВАЛИДАЦИЯ
 # ============================================================
 
+# Координаты слотов в Template JSON округлены до сотых сантиметра, поэтому
+# слот, упирающийся в край слайда, может «выступать» за него на 0.01–0.03 см.
+# Такой выход — не ошибка шаблона, слот прижимается к краю.
+SLOT_EDGE_TOLERANCE_CM = 0.5
+
+
 def validate_slot(
+    slot,
+    slide_width,
+    slide_height,
+    tolerance=SLOT_EDGE_TOLERANCE_CM,
+):
+    """
+    Проверяет, находится ли слот внутри слайда
+    (с допуском на округление координат).
+    """
+
+    return (
+        slot["x"] >= -tolerance
+        and slot["y"] >= -tolerance
+        and slot["w"] >= 0
+        and slot["h"] >= 0
+        and slot["x"] + slot["w"] <= slide_width + tolerance
+        and slot["y"] + slot["h"] <= slide_height + tolerance
+    )
+
+
+def clamp_slot(
     slot,
     slide_width,
     slide_height,
 ):
     """
-    Проверяет, находится ли слот внутри слайда.
+    Возвращает копию слота, прижатую к границам слайда.
+
+    Сам слот не меняется: Template JSON остается таким, каким его
+    извлек парсер. Если слот целиком за пределами слайда, возвращает
+    None — размещать в нем текст бессмысленно.
     """
 
-    return (
-        slot["x"] >= 0
-        and slot["y"] >= 0
-        and slot["w"] >= 0
-        and slot["h"] >= 0
-        and slot["x"] + slot["w"] <= slide_width
-        and slot["y"] + slot["h"] <= slide_height
-    )
+    x0 = max(0.0, float(slot["x"]))
+    y0 = max(0.0, float(slot["y"]))
+    x1 = min(float(slide_width), float(slot["x"]) + float(slot["w"]))
+    y1 = min(float(slide_height), float(slot["y"]) + float(slot["h"]))
+
+    if x1 <= x0 or y1 <= y0:
+        return None
+
+    clamped = dict(slot)
+    clamped["x"] = round(x0, 2)
+    clamped["y"] = round(y0, 2)
+    clamped["w"] = round(x1 - x0, 2)
+    clamped["h"] = round(y1 - y0, 2)
+    return clamped
 
 
 def get_variant(
@@ -611,6 +648,24 @@ def add_textbox(
             f"Slot: {slot_name}\n"
             f"{slot}"
         )
+
+    # Небольшой выход за край (округление координат при разборе
+    # шаблона) не должен ронять сборку: слот прижимается к краю.
+    clamped = clamp_slot(
+        slot,
+        slide_width,
+        slide_height,
+    )
+
+    if clamped is None:
+        raise ValueError(
+            "Текстовый слот целиком "
+            "за пределами слайда:\n\n"
+            f"Slot: {slot_name}\n"
+            f"{slot}"
+        )
+
+    slot = clamped
 
     margins = template.get(
         "text_box_defaults",

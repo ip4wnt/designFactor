@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import tempfile
 import uuid
@@ -16,14 +17,20 @@ from app.job_store import get as get_job
 from app.job_store import save as save_job
 from app.orchestrator import (
     SLIDE_EDIT_ACTIONS,
+    apply_manual_text,
     edit_slide,
     fix_audit_issues,
     rerun_assembly,
+    reset_designs,
     run_audit_for_selected_variant,
+    run_design,
     run_pipeline,
+    run_planning,
     select_variant,
     skip_audit,
 )
+from app.pipeline import briefing, materials as material_reader
+from app.pipeline import docx_tables, pdf_tables, tabular_text, xlsx_tables
 from app.pipeline import parser as template_parser
 from app.pipeline import template_engine
 from app.pipeline.design_system import DesignSystem, build_design_system
@@ -34,7 +41,7 @@ from app.pipeline.audit_overlay import draw_issue_overlay
 from app.pipeline.preview import PreviewError, render_variant_previews
 from app.schemas.content_plan import ContentBlock, ContentBlockType, ContentPlan
 from app.schemas.design_manifest import DesignManifest
-from app.schemas.job import Job, JobStatus
+from app.schemas.job import Job, JobStatus, MaterialInfo
 from app.schemas.template_analysis import TemplateAnalysis, TemplateAnalysisStatus
 from app.template_store import get as get_template_analysis
 from app.template_store import save as save_template_analysis
@@ -59,8 +66,34 @@ class SelectVariantRequest(BaseModel):
 
 
 class SlideEditRequest(BaseModel):
-    action: str  # recompose | take_from | rewrite
+    action: str  # recompose | take_from | rewrite | manual
     source: str | None = None  # вариант-источник для take_from
+    instruction: str = ""  # пожелание автора для rewrite
+    title: str | None = None  # для manual
+    text: str | None = None  # для manual
+
+
+class IdeaRequest(BaseModel):
+    topic: str
+    materials_text: str = ""
+    audience: str = ""
+    goal: str = ""
+    clarification: str = ""
+    previous_idea: str = ""
+
+
+class SelectPlanRequest(BaseModel):
+    plan: str
+
+
+class PlanSlideEditRequest(BaseModel):
+    title: str | None = None
+    text: str | None = None
+    why: str | None = None
+
+
+class PlanSlideRegenerateRequest(BaseModel):
+    instruction: str = ""
 
 
 class AddContentBlockRequest(BaseModel):
@@ -80,8 +113,10 @@ async def analyze_template(template: UploadFile = File(...)) -> TemplateAnalysis
     """
     settings = get_settings()
     template_analysis_id = str(uuid.uuid4())
+    if not (template.filename or "").lower().endswith(".pptx"):
+        raise HTTPException(status_code=400, detail="Презентация-ориентир должна быть в формате .pptx")
 
-    template_path = settings.templates_dir / f"{template_analysis_id}_{template.filename}"
+    template_path = settings.templates_dir / f"{template_analysis_id}_{Path(template.filename or 'template.pptx').name}"
     template_path.write_bytes(await template.read())
 
     analysis = TemplateAnalysis(
@@ -165,7 +200,15 @@ async def create_job(
         ),
     ),
     brief: str = Form(...),
-    purpose: str = Form(...),
+    purpose: str = Form(""),
+    idea: str = Form("", description="Главная идея (шаг «Для кого и зачем»). Если передана — запускается новый сценарий: три варианта плана до сборки дизайна."),
+    audience: str = Form(""),
+    goal: str = Form(""),
+    tone: str = Form(""),
+    must_have: str = Form(""),
+    materials_text: str = Form(""),
+    materials_json: str = Form("[]"),
+    material_ids_json: str = Form("[]"),
     content_plan: str | None = Form(
         None,
         description=(
@@ -195,6 +238,14 @@ async def create_job(
     settings = get_settings()
     job_id = str(uuid.uuid4())
 
+    try:
+        material_ids = json.loads(material_ids_json)
+        if not isinstance(material_ids, list) or any(not isinstance(value, str) for value in material_ids):
+            raise material_reader.MaterialError("material_ids_json должен быть списком ID")
+        documents = docx_tables.load_materials(material_ids, settings)
+    except (ValueError, material_reader.MaterialError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     preparsed_manifest: DesignManifest | None = None
     if template_analysis_id is not None:
         analysis = get_template_analysis(template_analysis_id)
@@ -218,8 +269,34 @@ async def create_job(
             raise HTTPException(status_code=400, detail=f"content_plan невалиден: {exc}") from exc
 
     job = Job(job_id=job_id, brief=brief, purpose=purpose, template_path=str(template_path))
+    job.source_tables = [table for document in documents for table in document.tables]
+    if parsed_plan is not None:
+        try:
+            docx_tables.bind_source_tables(parsed_plan.slides, job.source_tables)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if preparsed_manifest is not None:
         job.design_manifest = preparsed_manifest
+    if idea.strip() and parsed_plan is None:
+        job.idea = idea.strip()
+        job.audience = audience.strip()
+        job.goal = goal.strip()
+        job.tone = tone.strip()
+        job.must_have = must_have.strip()
+        job.materials_text = materials_text[:60_000]
+        try:
+            job.materials = [MaterialInfo.model_validate(m) for m in json.loads(materials_json or "[]")][:30]
+        except Exception:  # noqa: BLE001 — метаданные материалов необязательны
+            job.materials = []
+        job.slide_count = max(3, min(40, slide_count or 10))
+        job.slide_count_max = slide_count_max if slide_count_max and slide_count_max > job.slide_count else None
+        if not job.purpose:
+            job.purpose = f"Аудитория: {job.audience}. Решение: {job.goal}"
+        save_job(job)
+        asyncio.create_task(run_planning(job))
+        return {"job_id": job_id}
+    if not job.purpose:
+        job.purpose = "Презентация по задаче пользователя"
     save_job(job)
 
     # Не дожидаемся генерации — задача летит в фоне того же процесса
@@ -235,6 +312,163 @@ async def create_job(
     )
 
     return {"job_id": job_id}
+
+
+@router.post("/materials/extract")
+async def extract_material(file: UploadFile | None = File(None), url: str | None = Form(None)) -> dict[str, object]:
+    """Извлекает текст; таблицы DOCX/XLSX/PDF сохраняет на сервере под material_id."""
+    if file is None and not url:
+        raise HTTPException(status_code=400, detail="Передайте файл или ссылку")
+    try:
+        if file is not None:
+            data = await file.read(25 * 1024 * 1024 + 1)
+            if len(data) > 25 * 1024 * 1024:
+                raise material_reader.MaterialError("Файл больше 25 МБ")
+            name = file.filename or "материал"
+            suffix = Path(name).suffix.lower()
+            document = None
+            if suffix in {".docx", ".xlsx", ".pdf"}:
+                extractor = {".docx": docx_tables.extract_docx, ".xlsx": xlsx_tables.extract_xlsx,
+                             ".pdf": pdf_tables.extract_pdf}[suffix]
+                document = await asyncio.to_thread(extractor, name, data)
+            elif suffix in tabular_text.TABULAR_SUFFIXES:
+                # CSV, табличный JSON и markdown-таблицы в тексте идут в тот же анализ, что и Excel.
+                document = await asyncio.to_thread(tabular_text.extract_tabular, name, data, suffix)
+            if document is not None:
+                settings = get_settings()
+                await docx_tables.describe_tables(document, settings)
+                await asyncio.to_thread(docx_tables.save_material, document, data, settings)
+                note = {".docx": "Документ", ".xlsx": "Книга Excel", ".pdf": "PDF", ".csv": "Файл CSV",
+                        ".json": "JSON", ".txt": "Текст", ".md": "Текст"}[suffix]
+                if document.tables:
+                    note += f" · таблиц: {len(document.tables)}"
+                if document.note:
+                    note += " · " + document.note
+                return {"status": "ok", "name": name, "kind": "file", "note": note,
+                        "chars": len(document.text), "text": document.text[:30_000],
+                        "material_id": document.material_id,
+                        "tables": [docx_tables.public_table(table) for table in document.tables]}
+            kind, text = await asyncio.to_thread(material_reader.extract_file, name, data)
+            kind_label = "file"
+        else:
+            name = url.strip()
+            kind, text = await asyncio.to_thread(material_reader.extract_link, name)
+            kind_label = "link"
+    except material_reader.MaterialError as exc:
+        return {"status": "error", "name": (file.filename if file is not None else (url or "")), "kind": "link" if file is None else "file", "note": str(exc), "chars": 0, "text": ""}
+    return {"status": "ok", "name": name, "kind": kind_label, "note": kind, "chars": len(text), "text": text}
+
+
+@router.post("/briefing/idea")
+async def briefing_idea(payload: IdeaRequest) -> dict[str, object]:
+    """Главная идея презентации по теме, материалам, аудитории и ожидаемому решению.
+    Может вернуть один уточняющий вопрос (clarification), если без ответа смысл неоднозначен."""
+    if not payload.topic.strip():
+        raise HTTPException(status_code=400, detail="Нужно описание презентации")
+    try:
+        result = await briefing.generate_main_idea(
+            payload.topic, payload.materials_text, payload.audience, payload.goal, payload.clarification, payload.previous_idea,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Главная идея не сформирована")
+        raise HTTPException(status_code=502, detail=f"Не удалось определить главную идею: {exc}") from exc
+    return result.model_dump()
+
+
+_PLAN_EDITABLE = {
+    JobStatus.AWAITING_PLAN_CHOICE,
+    JobStatus.AWAITING_VARIANT_CHOICE,
+    JobStatus.AWAITING_AUDIT_CHOICE,
+    JobStatus.DONE,
+}
+
+
+def _plan_job(job_id: str, key: str):
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job не найден")
+    if job.status not in _PLAN_EDITABLE:
+        raise HTTPException(status_code=409, detail="Job сейчас занят — дождитесь завершения текущей операции")
+    variant = job.plan_variants.get(key)
+    if variant is None:
+        raise HTTPException(status_code=404, detail=f"Нет варианта плана {key}")
+    return job, variant
+
+
+def _mark_plan_changed(job: Job, key: str) -> None:
+    if job.selected_plan == key and job.variant_paths:
+        job.designs_stale = True
+
+
+@router.put("/jobs/{job_id}/plans/{key}/slides/{index}")
+async def edit_plan_slide(job_id: str, key: str, index: int, payload: PlanSlideEditRequest) -> dict[str, object]:
+    """Ручная правка слайда плана: заголовок, текст, «зачем этот слайд»."""
+    job, variant = _plan_job(job_id, key)
+    if not (0 <= index < len(variant.plan.slides)):
+        raise HTTPException(status_code=404, detail="Нет такого слайда")
+    if payload.title is not None and not payload.title.strip():
+        raise HTTPException(status_code=400, detail="Заголовок не должен быть пустым")
+    variant.plan.slides[index] = apply_manual_text(variant.plan.slides[index], payload.title, payload.text, payload.why)
+    _mark_plan_changed(job, key)
+    save_job(job)
+    return {"job_id": job_id, "plan": key, "slide": variant.plan.slides[index].model_dump(), "designs_stale": job.designs_stale}
+
+
+@router.post("/jobs/{job_id}/plans/{key}/slides/{index}/regenerate")
+async def regenerate_plan_slide(job_id: str, key: str, index: int, payload: PlanSlideRegenerateRequest) -> dict[str, object]:
+    """Новая подача одного слайда плана (по желанию — с инструкцией автора)."""
+    job, variant = _plan_job(job_id, key)
+    if not (0 <= index < len(variant.plan.slides)):
+        raise HTTPException(status_code=404, detail="Нет такого слайда")
+    try:
+        new_slide = await briefing.regenerate_slide(job, variant.plan, index, payload.instruction)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Перегенерация слайда плана упала")
+        raise HTTPException(status_code=502, detail=f"Не удалось перегенерировать слайд: {exc}") from exc
+    variant.plan.slides[index] = new_slide
+    _mark_plan_changed(job, key)
+    save_job(job)
+    return {"job_id": job_id, "plan": key, "slide": new_slide.model_dump(), "designs_stale": job.designs_stale}
+
+
+@router.post("/jobs/{job_id}/plans/{key}/regenerate")
+async def regenerate_plan(job_id: str, key: str) -> dict[str, object]:
+    """Другой вариант одного из трёх планов; остальные планы остаются как есть."""
+    job, variant = _plan_job(job_id, key)
+    try:
+        fresh = await briefing.regenerate_plan_variant(job, key, job.slide_count, job.slide_count_max)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Перегенерация плана упала")
+        raise HTTPException(status_code=502, detail=f"Не удалось построить другой вариант: {exc}") from exc
+    job.plan_variants[key] = fresh
+    if job.selected_plan == key:
+        job.content_plan = fresh.plan
+        _mark_plan_changed(job, key)
+    save_job(job)
+    return {"job_id": job_id, "plan": key, "variant": fresh.model_dump(), "designs_stale": job.designs_stale}
+
+
+@router.post("/jobs/{job_id}/select-plan")
+async def select_plan_endpoint(job_id: str, payload: SelectPlanRequest) -> dict[str, object]:
+    """Пользователь выбрал вариант плана: по нему собираются три варианта дизайна.
+    Если план не менялся и дизайн уже собран, повторной сборки нет."""
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job не найден")
+    if job.status not in _PLAN_EDITABLE:
+        raise HTTPException(status_code=409, detail="Job сейчас занят — дождитесь завершения текущей операции")
+    if payload.plan not in job.plan_variants:
+        raise HTTPException(status_code=400, detail=f"Нет варианта плана {payload.plan}")
+    if job.selected_plan == payload.plan and job.variant_paths and not job.designs_stale:
+        return {"job_id": job_id, "status": job.status.value, "rebuilt": False}
+    reset_designs(job)
+    job.selected_plan = payload.plan
+    job.content_plan = job.plan_variants[payload.plan].plan
+    job.status = JobStatus.ASSEMBLING
+    job.error = None
+    save_job(job)
+    asyncio.create_task(run_design(job))
+    return {"job_id": job_id, "status": job.status.value, "rebuilt": True}
 
 
 @router.get("/jobs/{job_id}")
@@ -325,7 +559,7 @@ async def edit_slide_endpoint(job_id: str, variant: str, index: int, payload: Sl
     if payload.action == "take_from" and (payload.source not in job.variant_paths or payload.source == variant):
         raise HTTPException(status_code=400, detail="Укажите другой собранный вариант-источник")
     try:
-        result = await edit_slide(job, variant, index, payload.action, payload.source)
+        result = await edit_slide(job, variant, index, payload.action, payload.source, payload.instruction, payload.title, payload.text)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — сбой рендера не должен ронять задачу целиком
@@ -356,6 +590,9 @@ async def import_excel_into_slide(
     file: UploadFile = File(...),
     sheet_name: str | None = Form(None),
     kind: str | None = Form(None),
+    goal: str = Form(""),
+    units: str = Form(""),
+    source: str = Form("", max_length=300),
 ) -> dict[str, object]:
     """Читает лист Excel, конвертирует в ChartData/TableData и добавляет
     получившийся content_block к указанному слайду ContentPlan'а.
@@ -383,7 +620,7 @@ async def import_excel_into_slide(
         tmp_path = Path(tmp.name)
 
     try:
-        resolved_kind, data = import_excel_block(tmp_path, sheet_name=sheet_name, kind=kind)
+        resolved_kind, data = import_excel_block(tmp_path, sheet_name=sheet_name, kind=kind, goal=goal or slide_spec.purpose)
     except ExcelImportError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
@@ -392,6 +629,8 @@ async def import_excel_into_slide(
     if resolved_kind == "table":
         block = ContentBlock(type=ContentBlockType.TABLE, table=data)
     else:
+        data.units = units
+        data.source = source or Path(file.filename or "Excel").name[:300]
         block = ContentBlock(type=ContentBlockType.CHART, chart=data)
 
     slide_spec.content_blocks.append(block)
@@ -494,12 +733,12 @@ async def preview_variant_slide(job_id: str, variant: str, slide_number: int) ->
     settings = get_settings()
     cache_dir = settings.outputs_dir / job.job_id / f"{variant}_preview"
     image_path = cache_dir / f"slide_{slide_number:02d}.png"
-    if not image_path.exists():
-        # Кэш мог ещё не быть построен — строим его сейчас же, чтобы прямая ссылка на картинку тоже работала.
-        try:
-            await render_variant_previews(pptx_path, cache_dir)
-        except PreviewError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    # Кэш мог ещё не быть построен или устареть после правки слайда: render_variant_previews
+    # сам сверяет mtime .pptx и при актуальном кэше возвращается сразу.
+    try:
+        await render_variant_previews(pptx_path, cache_dir)
+    except PreviewError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     if not image_path.exists():
         raise HTTPException(status_code=404, detail=f"Слайд {slide_number} не найден в превью")
     return FileResponse(image_path, media_type="image/png")
@@ -528,11 +767,10 @@ async def audit_overlay_slide(job_id: str, variant: str, slide_number: int) -> F
     settings = get_settings()
     cache_dir = settings.outputs_dir / job.job_id / f"{variant}_preview"
     image_path = cache_dir / f"slide_{slide_number:02d}.png"
-    if not image_path.exists():
-        try:
-            await render_variant_previews(pptx_path, cache_dir)
-        except PreviewError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    try:
+        await render_variant_previews(pptx_path, cache_dir)
+    except PreviewError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     if not image_path.exists():
         raise HTTPException(status_code=404, detail=f"Слайд {slide_number} не найден в превью")
 

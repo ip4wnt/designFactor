@@ -26,13 +26,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 
 from app.config import get_settings
-from app.pipeline import audit, audit_fix, content_agent, dramaturgy, parser, template_engine
+from app.pipeline import audit, audit_fix, briefing, content_agent, dramaturgy, parser, resilience, table_analysis, template_engine
 from app.pipeline.template_engine import VALID_VARIANTS, VARIANT_STRATEGIES
-from app.schemas.content_plan import ContentPlan
+from app.schemas.content_plan import ContentBlock, ContentBlockType, ContentPlan, SlideSpec
 from app.schemas.job import AuditCategory, AuditIssue, Job, JobStatus
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,101 @@ async def run_pipeline(
         job.error = str(exc)
 
 
+async def run_planning(job: Job) -> None:
+    """Шаг «Генерация плана выступления»: разбор шаблона и три варианта плана
+    (три логики рассказа по одной главной идее). Дизайн пока не собирается —
+    он строится после того, как пользователь выберет вариант содержания."""
+    settings = get_settings()
+    analysis_task = None
+    try:
+        async with _heavy_slot():
+            job.status = JobStatus.PARSING
+            analysis_task = asyncio.create_task(table_analysis.prepare_table_analysis(job, settings))
+            if job.design_manifest is None:
+                job.design_manifest = await asyncio.to_thread(parser.parse_template, job.template_path)
+            template = await asyncio.to_thread(template_engine.build_template_json, job.template_path)
+            job.template_json_path = str(_persist_template_json(job, settings, template))
+            job.status = JobStatus.PLANNING
+            await analysis_task
+            job.plan_variants = await briefing.generate_plan_variants(job, job.slide_count, job.slide_count_max)
+            job.selected_plan = None
+            job.status = JobStatus.AWAITING_PLAN_CHOICE
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Генерация плана упала для job %s", job.job_id)
+        job.status = JobStatus.FAILED
+        job.error = str(exc)
+    finally:
+        if analysis_task is not None and not analysis_task.done():
+            analysis_task.cancel()
+            await asyncio.gather(analysis_task, return_exceptions=True)
+
+
+def reset_designs(job: Job) -> None:
+    """Сбрасывает всё, что построено на выбранном плане (варианты дизайна, выбор, аудит)."""
+    job.variant_paths = {}
+    job.variant_plans = {}
+    job.variant_kinds = {}
+    job.variant_sources = {}
+    job.variant_descriptions = {}
+    job.variant_notes = {}
+    job.variant_errors = {}
+    job.audit_issues = {}
+    job.fixed_issue_ids = []
+    job.selected_variant = None
+    job.audit_skipped = False
+    job.audit_stale = False
+    job.alignment = None
+    job.slide_edits = {}
+    job.designs_stale = False
+
+
+async def run_design(job: Job) -> None:
+    """Выбранный план -> структурирование текстов -> три варианта дизайна."""
+    plan = job.content_plan
+    if plan is None:
+        job.status = JobStatus.FAILED
+        job.error = "Не выбран вариант плана"
+        return
+    # старые structured.json/plan_*.json относились к прежнему плану
+    job_dir = get_settings().outputs_dir / job.job_id
+    for name in ("structured.json", "plan_variant_a.json", "plan_variant_b.json", "plan_variant_c.json"):
+        (job_dir / name).unlink(missing_ok=True)
+    await run_pipeline(job, content_plan=plan)
+
+
+def plan_slide_text(spec: SlideSpec) -> str:
+    """Текст слайда для поля «Что говорим на слайде»: буллеты — по строке, абзац — как есть."""
+    parts: list[str] = []
+    for block in spec.content_blocks:
+        if block.type == ContentBlockType.BULLETS:
+            parts.extend(block.bullets or [])
+        elif block.type == ContentBlockType.TEXT and block.text:
+            parts.append(block.text)
+    return "\n".join(parts)
+
+
+def apply_manual_text(spec: SlideSpec, title: str | None, text: str | None, why: str | None) -> SlideSpec:
+    blocks = list(spec.content_blocks)
+    if text is not None:
+        lines = [line.strip().lstrip("•-– ").strip() for line in text.splitlines() if line.strip()]
+        data_blocks = [b for b in blocks if b.type in (ContentBlockType.CHART, ContentBlockType.TABLE)]
+        had_bullets = any(b.type == ContentBlockType.BULLETS for b in blocks)
+        new_blocks: list[ContentBlock] = []
+        if lines:
+            if len(lines) == 1 and not had_bullets:
+                new_blocks.append(ContentBlock(type=ContentBlockType.TEXT, text=lines[0]))
+            else:
+                new_blocks.append(ContentBlock(type=ContentBlockType.BULLETS, bullets=lines))
+        blocks = new_blocks + data_blocks
+    return SlideSpec(
+        slide_id=spec.slide_id, purpose=spec.purpose,
+        title=briefing.deyo(title.strip()) if title is not None and title.strip() else spec.title,
+        content_blocks=blocks, why=briefing.deyo(why.strip()) if why is not None else spec.why, data_gap=spec.data_gap,
+        source_table_id=spec.source_table_id,
+        data_note=spec.data_note,
+    )
+
+
 async def select_variant(job: Job, variant: str) -> None:
     """Пользователь выбрал один из трёх вариантов вёрстки на экране сравнения.
 
@@ -141,6 +237,7 @@ async def run_audit_for_selected_variant(job: Job) -> None:
         job.status = JobStatus.AUDITING
         async with _heavy_slot():
             await _run_audit_one_variant(job, settings, variant)
+        job.alignment = await briefing.audit_alignment(job)
         job.audit_skipped = False
         job.audit_stale = False
         job.status = JobStatus.DONE
@@ -273,9 +370,20 @@ def _load_structured(job: Job, settings):
 
 
 async def _assemble_all_variants(job: Job, settings, template=None, layout_plan=None) -> None:
+    """Три варианта собираются независимо: сломанный вариант не отменяет
+    остальные. Задача падает, только если не собрался ни один."""
     template = template or _load_job_template(job, settings)
+    job.variant_errors = {}
     for variant in VALID_VARIANTS:
-        await asyncio.to_thread(_assemble_one_variant, job, settings, variant, template, layout_plan)
+        try:
+            await asyncio.to_thread(_assemble_one_variant, job, settings, variant, template, layout_plan)
+        except Exception as exc:  # noqa: BLE001 — вариант не собрался, остальные продолжаем
+            logger.exception("Вариант %s не собрался для job %s", variant, job.job_id)
+            job.variant_errors[variant] = resilience.friendly_error(exc)
+            job.variant_paths.pop(variant, None)
+    if not job.variant_paths:
+        reasons = "; ".join(f"{VARIANT_STRATEGIES[v]['label']}: {e}" for v, e in job.variant_errors.items())
+        raise RuntimeError("Ни один вариант дизайна не собрался. " + reasons)
 
 
 def _assemble_one_variant(job: Job, settings, variant: str, template=None, layout_plan=None) -> None:
@@ -297,10 +405,12 @@ def _assemble_one_variant(job: Job, settings, variant: str, template=None, layou
             template_engine.fill_image_slots(
                 template, plan, job.template_path, job_dir / "assets", brief=job.brief, fill_optional=bool(profile["images"])
             )
-            _persist_json(job_dir / f"plan_{variant}.json", plan)
-            template_engine.render_variant(
-                template, plan, job.template_path, output_path, job.design_manifest, job.content_plan, variant
+            notes = resilience.render_with_repair(
+                template, plan, job.template_path, output_path, job.design_manifest, job.content_plan, variant,
+                _slide_rebuilder(job, template, structured, variant, job_dir, bool(profile["images"])),
             )
+            _persist_json(job_dir / f"plan_{variant}.json", plan)
+            job.variant_notes[variant] = notes
         except Exception:  # noqa: BLE001 — откатываемся на старый планировщик
             logger.exception("Драматургия не собрала вариант %s — используем план по макетам", variant)
             plan = None
@@ -312,12 +422,36 @@ def _assemble_one_variant(job: Job, settings, variant: str, template=None, layou
         template_engine.fill_image_slots(
             template, plan, job.template_path, job_dir / "assets", brief=job.brief, fill_optional=(variant == "variant_c")
         )
-        _persist_json(job_dir / f"plan_{variant}.json", plan)
-        template_engine.render_variant(
-            template, plan, job.template_path, output_path, job.design_manifest, job.content_plan, variant
+        # Для плана по макетам альтернативных композиций нет: сломанный
+        # слайд убирается из варианта с пометкой
+        notes = resilience.render_with_repair(
+            template, plan, job.template_path, output_path, job.design_manifest, job.content_plan, variant, None
         )
+        _persist_json(job_dir / f"plan_{variant}.json", plan)
+        job.variant_notes[variant] = notes
         description = {"label": VARIANT_STRATEGIES[variant]["label"], "description": VARIANT_STRATEGIES[variant]["description"]}
     _register_variant(job, variant, plan, description, output_path)
+
+
+def _slide_rebuilder(job: Job, template, structured, density: str, job_dir: Path, fill_optional: bool):
+    """Фабрика «другая композиция для слайда» для самовосстановления сборки:
+    та же драматургия, что и у кнопки «Перекомпоновать макет», но с запретом
+    уже опробованных композиций."""
+
+    def rebuild(index: int, source_index: int, tried: set[str]) -> dict | None:
+        fresh = dramaturgy.build_variant_plan(
+            template, job.content_plan, structured, density, job.brief, template_engine._shorten, {source_index: set(tried)}
+        )
+        candidate = next((s for s in fresh["slides"] if int(s.get("source_index", -1)) == source_index), None)
+        if candidate is None:
+            return None
+        template_engine.fill_image_slots(
+            template, {"slides": [candidate], "density": density}, job.template_path, job_dir / "assets",
+            brief=job.brief, fill_optional=fill_optional,
+        )
+        return candidate
+
+    return rebuild
 
 
 def _register_variant(job: Job, variant: str, plan: dict, description, output_path: Path) -> None:
@@ -330,10 +464,10 @@ def _register_variant(job: Job, variant: str, plan: dict, description, output_pa
     job.export_paths["pptx"] = str(output_path)  # последний собранный вариант — путь для /export по умолчанию
 
 
-SLIDE_EDIT_ACTIONS = {"recompose", "take_from", "rewrite"}
+SLIDE_EDIT_ACTIONS = {"recompose", "take_from", "rewrite", "manual"}
 
 
-async def edit_slide(job: Job, variant: str, index: int, action: str, source: str | None = None) -> dict:
+async def edit_slide(job: Job, variant: str, index: int, action: str, source: str | None = None, instruction: str = "", title: str | None = None, text: str | None = None) -> dict:
     """Ручная доработка одного слайда уже собранного варианта.
 
     - ``recompose`` — другая композиция для слайда: план варианта считается
@@ -379,10 +513,15 @@ async def edit_slide(job: Job, variant: str, index: int, action: str, source: st
                 raise ValueError("В варианте-источнике нет этого слайда (он собран без разделителей)")
             plan["slides"][index] = json.loads(json.dumps(source_slide))
         else:
-            if action == "rewrite":
-                model = template_engine.BackendModel(settings.LLM_BASE_URL, settings.LLM_MODEL_NAME, settings.LLM_API_KEY)
-                previous = structured[src] if src < len(structured) else None
-                new_struct = await asyncio.to_thread(dramaturgy.restructure_slide, job.content_plan, job.brief, model, src, previous)
+            if action in ("rewrite", "manual"):
+                if action == "manual":
+                    # Автор правит текст сам: формулировки не трогаем, структура строится детерминированно
+                    job.content_plan.slides[src] = apply_manual_text(job.content_plan.slides[src], title, text, None)
+                    new_struct = dramaturgy.structure_fallback(src, job.content_plan.slides[src], len(job.content_plan.slides))
+                else:
+                    model = template_engine.BackendModel(settings.LLM_BASE_URL, settings.LLM_MODEL_NAME, settings.LLM_API_KEY)
+                    previous = structured[src] if src < len(structured) else None
+                    new_struct = await asyncio.to_thread(dramaturgy.restructure_slide, job.content_plan, job.brief, model, src, previous, instruction)
                 while len(structured) <= src:
                     structured.append(dramaturgy.structure_fallback(len(structured), job.content_plan.slides[len(structured)], len(job.content_plan.slides)))
                 structured[src] = new_struct
@@ -413,14 +552,21 @@ async def edit_slide(job: Job, variant: str, index: int, action: str, source: st
         )
         _persist_json(plan_path, plan)
         output_path = job_dir / f"presentation_{variant}.pptx"
-        await asyncio.to_thread(
-            template_engine.render_variant, template, plan, job.template_path, output_path, job.design_manifest, job.content_plan, variant
+        notes = await asyncio.to_thread(
+            resilience.render_with_repair, template, plan, job.template_path, output_path, job.design_manifest, job.content_plan, variant,
+            _slide_rebuilder(job, template, structured, plan["density"], job_dir, bool(profile["images"])),
         )
+        if notes:
+            _persist_json(plan_path, plan)
+            job.variant_notes.setdefault(variant, []).extend(notes)
         _register_variant(job, variant, plan, None, output_path)
         if job.audit_issues.pop(variant, None) is not None and previous_status == JobStatus.DONE and not job.audit_skipped:
             job.audit_stale = True
-        result["after"] = plan["slides"][index]["variant"]
-        result["kind"] = plan["slides"][index].get("composition_kind")
+        if index < len(plan["slides"]):
+            result["after"] = plan["slides"][index]["variant"]
+            result["kind"] = plan["slides"][index].get("composition_kind")
+        if notes:
+            result["notes"] = notes
         return result
     finally:
         job.status = previous_status
@@ -434,9 +580,29 @@ async def _run_audit_one_variant(job: Job, settings, variant: str) -> None:
         manifest=job.design_manifest,
         allowed_fonts=template_engine.font_families(template),
         allowed_sizes=template_engine.font_sizes(template),
+        expected_texts=_plan_texts(job),
     )
     issues.extend(await _run_vlm_audit_safely(output_path, settings))
     job.audit_issues[variant] = issues
+
+
+def _plan_texts(job: Job) -> list[str]:
+    """Все фразы плана содержания: заголовки, подзаголовки, тезисы, тексты, подписи таблиц и графиков —
+    эталон для проверки, что на слайде фраза не оборвана."""
+    texts: list[str] = []
+    plan = job.content_plan
+    if plan is None:
+        return texts
+    for slide in plan.slides:
+        texts.extend(t for t in (slide.title, getattr(slide, "subtitle", None)) if t)
+        for block in slide.content_blocks or []:
+            texts.extend(block.bullets or [])
+            if block.text:
+                texts.append(block.text)
+                texts.extend(x.strip() for x in re.split(r"(?<=[.!?])\s+", block.text) if x.strip())
+            if block.chart is not None and getattr(block.chart, "title", None):
+                texts.append(block.chart.title)
+    return texts
 
 
 async def _run_vlm_audit_safely(output_path, settings) -> list[AuditIssue]:

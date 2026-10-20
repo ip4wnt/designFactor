@@ -14,7 +14,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from pptx.chart.data import CategoryChartData
 from pptx.oxml.ns import qn
 from pptx.util import Emu, Pt
 
@@ -701,19 +700,9 @@ def replace_with_chart(slide, shape_id: int, chart_block, manifest, chart_type_m
     box = _bbox(element)
     if box is None:
         return False
-    from app.pipeline.styling import style_chart
+    from app.pipeline.charts import add_chart
 
-    left, top, width, height = box
-    chart_data = CategoryChartData()
-    chart_data.categories = chart_block.categories
-    for series in chart_block.series:
-        chart_data.add_series(series.name, series.values)
-    frame = slide.shapes.add_chart(chart_type_map[chart_block.chart_type.value], Emu(left), Emu(top), Emu(width), Emu(height), chart_data)
-    if manifest is not None:
-        try:
-            style_chart(frame.chart, manifest, slide=slide)
-        except Exception:  # noqa: BLE001
-            logger.exception("Не удалось стилизовать график")
+    frame = add_chart(slide, chart_block, box, manifest, chart_type_map)
     parent = element.getparent()
     if parent is not None:
         # Новый график ставим на место картинки по z-порядку

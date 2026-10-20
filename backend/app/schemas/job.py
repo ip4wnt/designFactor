@@ -7,12 +7,16 @@ from pydantic import BaseModel, Field
 
 from app.schemas.content_plan import ContentPlan
 from app.schemas.design_manifest import DesignManifest
+from app.schemas.source_tables import SourceTable, TableAnalysisReport
 
 
 class JobStatus(str, Enum):
     QUEUED = "queued"
     PARSING = "parsing"
     PLANNING = "planning"
+    # Три варианта плана выступления готовы — ждём выбора содержания
+    # (POST /jobs/{id}/select-plan), после чего собираются варианты дизайна.
+    AWAITING_PLAN_CHOICE = "awaiting_plan_choice"
     ASSEMBLING = "assembling"
     # Три варианта собраны, аудит ещё не запущен — ждём выбора варианта
     # от пользователя (POST /jobs/{id}/select-variant) перед тем как предложить аудит/экспорт.
@@ -63,6 +67,26 @@ class AuditIssue(BaseModel):
     fixed: bool = False
 
 
+class PlanVariant(BaseModel):
+    """Один из трёх вариантов плана выступления (одна логика рассказа)."""
+
+    key: str  # A | B | C
+    name: str
+    description: str
+    story: str = ""
+    plan: ContentPlan
+
+
+class MaterialInfo(BaseModel):
+    """Источник содержания, который пользователь добавил на втором шаге."""
+
+    name: str
+    kind: str  # file | link | note
+    chars: int = 0
+    status: str = "ok"  # ok | error
+    note: str = ""
+
+
 class Job(BaseModel):
     job_id: str
     status: JobStatus = JobStatus.QUEUED
@@ -97,6 +121,11 @@ class Job(BaseModel):
     # Вид композиции каждого слайда варианта (cover/section/cards/chart/…) —
     # чтобы UI показывал, чем варианты отличаются на каждом слайде.
     variant_kinds: dict[str, list[str]] = Field(default_factory=dict)
+    # Самовосстановление сборки: что сервис исправил сам в каждом варианте
+    # («слайд 4: композиция не поместилась — подобрана другая») и почему
+    # вариант не собрался совсем (остальные варианты при этом отдаются).
+    variant_notes: dict[str, list[str]] = Field(default_factory=dict)
+    variant_errors: dict[str, str] = Field(default_factory=dict)
     variant_sources: dict[str, list[int]] = Field(default_factory=dict, description="Для каждого варианта — индекс слайда плана содержания для каждого слайда варианта (варианты без разделителей короче плана)")
     # Аудит выбранного варианта проводился, но после него слайды дорабатывались
     # (другая компоновка / тексты / слайд из другого варианта) — результаты устарели.
@@ -104,3 +133,24 @@ class Job(BaseModel):
     # История ручных «другая компоновка» по вариантам и индексам слайдов:
     # variant → {"3": [id композиции, …]} — чтобы каждый раз давать новую.
     slide_edits: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
+    # --- Брифование (4 шага на главной) -----------------------------------------
+    idea: str = ""
+    audience: str = ""
+    goal: str = ""
+    tone: str = ""
+    must_have: str = ""
+    materials_text: str = Field(default="", exclude=True)
+    source_tables: list[SourceTable] = Field(default_factory=list, exclude=True)
+    table_analysis: TableAnalysisReport | None = None
+    materials: list[MaterialInfo] = Field(default_factory=list)
+    # Три варианта плана выступления и выбранный пользователем.
+    plan_variants: dict[str, PlanVariant] = Field(default_factory=dict)
+    selected_plan: str | None = None
+    # Результат аудита смысла (связь с главной идеей, целью, призывом в финале).
+    alignment: dict | None = None
+    # Какие операции с планом выполняются прямо сейчас — для индикаторов в интерфейсе.
+    busy_note: str = ""
+    slide_count: int = 10
+    slide_count_max: int | None = None
+    # План изменился после сборки дизайна — дизайн нужно собрать заново.
+    designs_stale: bool = False
