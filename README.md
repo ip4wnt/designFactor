@@ -8,6 +8,7 @@
 результата не требуется.
 
 Рабочая версия: <http://111.88.114.242/> (десктоп).
+Репозиторий на Сорскрафте https://sourcecraft.dev/lct-hackaton-2026/case-14-ai-presentation-designer-team-10?rev=main
 
 ---
 
