@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     TABLE_SUMMARY_TIMEOUT_S: float = 20.0
     TABLE_ANALYSIS_ENABLED: bool = True
     TABLE_ANALYSIS_TIMEOUT_S: float = Field(default=150.0, gt=0, le=300)
-    TABLE_ANALYSIS_MAX_TURNS: int = Field(default=14, ge=1, le=20)
+    TABLE_ANALYSIS_MAX_TURNS: int = Field(default=20, ge=1, le=20)
     TABLE_ANALYSIS_MAX_TOOL_CALLS: int = Field(default=20, ge=1, le=40)
     TABLE_ANALYSIS_MAX_RESULTS: int = Field(default=3, ge=1, le=10)
     # Сколько тяжёлых стадий (разбор шаблона + сборка трёх вариантов, пересборка,
